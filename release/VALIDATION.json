@@ -1,62 +1,47 @@
 {
   "format": "copper-source-validation/v1",
-  "recordedAt": "2026-10-26T02:38:25.930933+00:00",
-  "scope": "PUBLIC_SOURCE_PACKAGE_BUILD_NOT_NEW_BINARY_RELEASE_ACCEPTANCE",
-  "sourceVersion": "0.4.0-rc.11",
+  "recordedAt": "2026-10-26T12:35:34.822436+00:00",
+  "scope": "SOURCE_DIRECTORY_NAMING_REVISION",
+  "sourceVersion": "0.4.0-rc.12",
+  "baselinePublicSourceCommit": "ba872ff852b0213245cf8f81d33226e9d4479311",
+  "currentComponentDirectories": [
+    "copper-backend",
+    "copper-web",
+    "copper-deploy"
+  ],
   "backend": {
+    "sourcePackageBuild": "PASS_FROM_RENAMED_DIRECTORY",
+    "unitTestsThisRevision": "NOT_RERUN_NO_JAVA_SOURCE_CHANGE",
+    "previousUnitContractTests": 227,
     "java": "17.0.12",
-    "maven": "3.9.14",
-    "unitContractTests": 227,
-    "failures": 0,
-    "errors": 0,
-    "skippedInSelectedSuites": 0,
-    "jarPackage": "PASS_BUILT_NOT_DISTRIBUTED",
-    "realMysqlTestsThisPublication": "NOT_RERUN",
-    "previousExactSourceMysqlAcceptance": {
-      "tests": 98,
-      "sourceCommit": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9",
-      "result": "PASS_PREVIOUS_ACTUAL_ACCEPTANCE"
-    },
-    "optionalLiveOcrThisPublication": "NOT_RUN"
+    "maven": "3.9.14"
   },
   "web": {
-    "node": "22.15.0",
-    "pnpm": "9.15.7",
-    "frozenLockfileInstall": "PASS_PUBLIC_DOWNLOADS_TO_ISOLATED_CACHE",
     "unitTests": 176,
     "failures": 0,
-    "typescriptAndViteBuild": "PASS_DIST_NOT_DISTRIBUTED",
-    "existingChunkSizeWarningRetained": true
+    "typecheckAndViteBuild": "PASS",
+    "pnpm": "9.15.7",
+    "node": "22.15.0"
   },
   "deploy": {
     "pythonTests": 386,
     "result": "PASS",
     "staticAndM3Contracts": "PASS",
-    "testEnvironment": "Mac normal execution, loopback random test ports allowed; no Docker or database started"
+    "normalExecutionForOwnedLoopbackTestPorts": true
   },
-  "initialEnvironmentFailuresPreserved": {
-    "backend": "Sandbox blocked Mockito instrumentation; same 227 tests passed in normal execution without source edits.",
-    "deploy": "Sandbox blocked nine local loopback server setups; same 386 tests passed in normal execution without source edits.",
-    "web": "Offline package cache was incomplete; frozen lock install succeeded using public package URLs, without lockfile edits."
-  },
-  "runtimeSourceChanges": false,
-  "publicAnonymousReproduction": "TO_BE_RECORDED_IN_SEPARATE_PUBLICATION_RECEIPT_AFTER_VISIBILITY_CHANGE",
-  "officialBinariesDistributed": false,
-  "deferredAcceptance": [
-    "real-browser-and-mobile",
-    "professional-legal-accounting",
-    "customer-nondeveloper-install",
-    "customer-key-witness-signatures"
-  ],
+  "rootDirectoryAndDocumentLinkCheck": "PASS",
+  "oldDirectorySymlinksCreated": false,
+  "businessJavaTypescriptSqlChanged": false,
+  "databaseDockerOrProductServiceStarted": false,
+  "newBinaryOrUpgradeAcceptanceClaimed": false,
+  "previousRc11RecordsBytePreserved": true,
+  "anonymousReproduction": "RECORDED_IN_POST_PUBLICATION_RECEIPT_AFTER_PUBLISH",
   "logSha256": {
-    "local-deploy-python-unsandboxed.log": "971ae5a6215f18cef9b0de3543c964e92f70859df3597cc580f3236fd5913164",
-    "local-backend-unsandboxed.log": "3295c75e741cb3af0a1f34124266ce3bc37fc248b51643933fd9d5adc26960dc",
-    "local-web-install.log": "5298acd027b6868caf6c220d2c9d2bec33c4c68b956a58662264bbb1c3b6d249",
-    "local-web-build.log": "77a5919ba2320715977de3010132a4c095cb43eeff2dd16897d0587221c26ff8",
-    "local-web-install-online.log": "387409a17dbacfdf7b814c8311fda245f4b71980a6ec165b4ad936493a6cd2e3",
-    "local-backend.log": "0ace94dfdfae63f3376bc366959fd68bce299e5191c7ed3cdc82ed65625840fe",
-    "local-web-tests.log": "5bfc5249790ab5580474efcc523406e09c259c3f919837dcdedf95d1c386e351",
-    "local-deploy-python.log": "d370635873a5d64e134fa0ade2e1cab93486b6f3e82eedbb4242f27700dc0ad0",
-    "local-deploy-static.log": "efa2ec6a61dc9bb3e8ca2a5071d15c841d3866a891976fd969f09f2cfb12d890"
+    "web-install.log": "59d8875125e31192235bbc7414664f686f2f3c2abd8b7bd1a247010de0102a24",
+    "backend-package.log": "31f969de70824fccf6f67a87250a0041a9c62583a7bd345a7c6a8b4a45ec00ba",
+    "web-build.log": "ae631d69e767cd4ea9d06a256a6aa7edca8dfb8ad52ecf01e2be0373a21a9638",
+    "deploy-python.log": "c86b31eb523f381848092b78f0957dc02cd549f99363fd12376a9746c940f410",
+    "deploy-static.log": "efa2ec6a61dc9bb3e8ca2a5071d15c841d3866a891976fd969f09f2cfb12d890",
+    "web-tests.log": "e9fe12d3e253766cfcb19682ab3b27e05924840d900a407cc30c57657eadc2a5"
   }
 }

@@ -1,12 +1,12 @@
 # 部署工具源码范围
 
-本目录相邻的 copper_deploy/ 是唯一运行编排、配置模板及备份/恢复/升级实现。其既有一站式安装器、工厂及 source-rehearsal 工具保留 INTERNAL_REHEARSAL_ONLY 格式和原门槛；本次没有去掉检查或把原验收介质换名公开。它们的历史私有 clone 路径不是本仓源码构建前置。
+本目录相邻的 copper-deploy/ 是唯一运行编排、配置模板及备份/恢复/升级实现。其既有一站式安装器、工厂及 source-rehearsal 工具保留 INTERNAL_REHEARSAL_ONLY 格式和原门槛；本次没有去掉检查或把原验收介质换名公开。它们的历史私有 clone 路径不是本仓源码构建前置。
 
 可在本公开根目录验证源码，随后检查工具合同：
 
 ```sh
 python3 scripts/verify-source-release.py
-cd copper_deploy
+cd copper-deploy
 bash tests/static-contract.sh
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```

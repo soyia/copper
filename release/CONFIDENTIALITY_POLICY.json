@@ -207,6 +207,34 @@
       "owner": "Copper release engineering technical review",
       "reason": "Exact synthetic source-acceptance archive Git blob verified against previously reviewed SHA256 2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d; only new independent source history, no customer payload/private identity, no old platform history approval.",
       "expiresOn": "2027-10-26"
+    },
+    {
+      "findingId": "8a5ad9c1c2727153eca6146962d88995f7c04bfe9703100cb1cde7cfdaec8cdc",
+      "decision": "false-positive",
+      "owner": "Copper release engineering technical review",
+      "reason": "Directory naming migration only. Exact archive SHA256 15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb matches the previously independent byte-level synthetic acceptance/driver review. No customer backup/private identity; no old private history approval.",
+      "expiresOn": "2027-10-26"
+    },
+    {
+      "findingId": "c4235fb86335256a54b99f7110cc92a7ab0ad06a8b244415b0d9fbf07b31bf3b",
+      "decision": "false-positive",
+      "owner": "Copper release engineering technical review",
+      "reason": "Directory naming migration only. Exact archive SHA256 2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d matches the previously independent byte-level synthetic acceptance/driver review. No customer backup/private identity; no old private history approval.",
+      "expiresOn": "2027-10-26"
+    },
+    {
+      "findingId": "9b46771d654cb8326aaa3de2c8252a0ffd2ea6e596d4493436ee133e0cdf7f65",
+      "decision": "false-positive",
+      "owner": "Copper release engineering technical review",
+      "reason": "Directory naming migration only. Exact archive SHA256 15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb matches the previously independent byte-level synthetic acceptance/driver review. No customer backup/private identity; no old private history approval.",
+      "expiresOn": "2027-10-26"
+    },
+    {
+      "findingId": "c01994954b9b2e20700315bb68b722ad93a2a4facfc3855f20f6b611834c8b7a",
+      "decision": "false-positive",
+      "owner": "Copper release engineering technical review",
+      "reason": "Directory naming migration only. Exact archive SHA256 2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d matches the previously independent byte-level synthetic acceptance/driver review. No customer backup/private identity; no old private history approval.",
+      "expiresOn": "2027-10-26"
     }
   ]
 }

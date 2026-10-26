@@ -85,8 +85,8 @@ function usage() {
   return `Usage:
   node scripts/security/audit-repositories.mjs \\
     --repo copper_web=/path/to/copper-web \\
-    [--repo copper_backend=/path/to/copper_backend] \\
-    [--repo copper_deploy=/path/to/copper_deploy] \\
+    [--repo copper_backend=/path/to/copper-backend] \\
+    [--repo copper_deploy=/path/to/copper-deploy] \\
     --config config/m6-confidentiality-audit.json \\
     [--baseline config/m6-known-confidentiality-findings.json] \\
     --report /private/path/report.json \\
