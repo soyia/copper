@@ -1,0 +1,9 @@
+{
+  "format": "copper-confidentiality-baseline/v1",
+  "recordedAt": "2026-10-26",
+  "owner": "Copper public source release",
+  "status": "independent-new-source-repository-no-old-history",
+  "rationale": "Empty baseline; only separately documented exact synthetic artifact false positives may be approved. No old private platform history disposition is changed.",
+  "repositoryHeads": {},
+  "knownFindingIds": []
+}

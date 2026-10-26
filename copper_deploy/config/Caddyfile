@@ -1,0 +1,15 @@
+{
+	admin off
+}
+
+{$COPPER_SITE_ADDRESS} {
+	import /etc/caddy/Caddyfile.common
+}
+
+http://127.0.0.1:8081 {
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	respond 404
+}

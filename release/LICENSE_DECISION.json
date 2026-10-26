@@ -1,0 +1,10 @@
+{
+  "format": "copper-public-license-decision/v1",
+  "ownerInstruction": "好的，使用AGPL-3.0",
+  "recordedDate": "2026-10-26",
+  "license": "AGPL-3.0-only",
+  "appliesTo": "Original Copper source in this identified public snapshot; preserves separately licensed third-party files.",
+  "legalReviewClaimed": false,
+  "separateCommercialLicenseGranted": false,
+  "oldPrivateRepositoriesToRemainPrivate": true
+}

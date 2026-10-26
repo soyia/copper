@@ -1,0 +1,244 @@
+name: Transfer MySQL amd64 image for M7 internal rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact reviewed copper_deploy commit whose immutable GHCR image will be transferred
+        required: true
+        type: string
+      transfer_draft_tag:
+        description: Existing private draft tag in the m7-internal-transfer namespace
+        required: true
+        type: string
+      transfer_draft_id:
+        description: Exact numeric ID of the existing private draft release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transfer-m7-mysql-${{ github.ref }}-${{ inputs.transfer_draft_tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate private transfer and reviewed source
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      expected_local_id: ${{ steps.source.outputs.expected_local_id }}
+      source_tag: ${{ steps.source.outputs.source_tag }}
+      delivery_tag: ${{ steps.source.outputs.delivery_tag }}
+    steps:
+      - name: Check out complete reviewed history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+
+      - name: Reject unreviewed source or public transfer target
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          TRANSFER_TAG: ${{ inputs.transfer_draft_tag }}
+          TRANSFER_DRAFT_ID: ${{ inputs.transfer_draft_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || {
+            echo "Internal transfer must be dispatched from main" >&2
+            exit 2
+          }
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Source commit must be an exact full Git commit" >&2
+            exit 2
+          }
+          image=ghcr.io/soyia/copper_mysql
+          source_tag="$image:sha-$SOURCE_COMMIT"
+          delivery_tag="$image:m6-delivery-$SOURCE_COMMIT-amd64"
+          expected_local_id=""
+          if git cat-file -e "$SOURCE_COMMIT^{commit}" 2>/dev/null \
+            && git merge-base --is-ancestor "$SOURCE_COMMIT" "$GITHUB_SHA"; then
+            :
+          else
+            allowlist=config/m7-internal-legacy-image-transfer.json
+            [[ "$(jq -r '.formatVersion' "$allowlist")" == "copper-m7-internal-legacy-image-transfer/v1" ]] || exit 2
+            [[ "$(jq -r '.status' "$allowlist")" == "INTERNAL_REHEARSAL_ONLY" ]] || exit 2
+            entry="$(jq -c --arg commit "$SOURCE_COMMIT" '
+              [.images[] | select(.role == "mysql" and .sourceCommit == $commit)] |
+              if length == 1 then .[0] else empty end
+            ' "$allowlist")"
+            [[ -n "$entry" ]] || {
+              echo "Detached source commit is not in the reviewed M7 legacy transfer allowlist" >&2
+              exit 2
+            }
+            source_tag="$(jq -r '.sourceTag' <<<"$entry")"
+            delivery_tag="$(jq -r '.deliveryTag' <<<"$entry")"
+            expected_local_id="$(jq -r '.expectedLocalId' <<<"$entry")"
+            evidence="$(jq -r '.reviewedEvidence' <<<"$entry")"
+            [[ "$source_tag" == "$image:sha-$SOURCE_COMMIT" ]] || exit 2
+            [[ "$delivery_tag" == "$image:m6-delivery-$SOURCE_COMMIT-amd64" ]] || exit 2
+            [[ "$expected_local_id" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 2
+            [[ -f "$evidence" ]] || exit 2
+            grep -Fq "$expected_local_id" "$evidence" || {
+              echo "Reviewed evidence does not contain the allowlisted image ID" >&2
+              exit 2
+            }
+          fi
+          {
+            echo "expected_local_id=$expected_local_id"
+            echo "source_tag=$source_tag"
+            echo "delivery_tag=$delivery_tag"
+          } >> "$GITHUB_OUTPUT"
+          [[ "$TRANSFER_TAG" =~ ^m7-internal-transfer-[0-9A-Za-z._-]{1,96}$ ]] || {
+            echo "Private draft transfer tag is outside the controlled M7 namespace" >&2
+            exit 2
+          }
+          [[ "$TRANSFER_DRAFT_ID" =~ ^[0-9]+$ ]] || {
+            echo "Private draft release ID must be numeric" >&2
+            exit 2
+          }
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private')" == "true" ]] || {
+            echo "Internal transfer is forbidden for a public repository" >&2
+            exit 2
+          }
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID")"
+          [[ "$(jq -r '.draft' <<<"$release_json")" == "true" ]] || {
+            echo "Transfer target must be an existing private draft release" >&2
+            exit 2
+          }
+          [[ "$(jq -r '.tag_name' <<<"$release_json")" == "$TRANSFER_TAG" ]] || {
+            echo "Private draft release ID and tag do not identify the same target" >&2
+            exit 2
+          }
+
+  transfer:
+    name: Export and transfer immutable linux/amd64 image
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Check out reviewed import identity verifier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Export exact published image and evidence
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TAG: ${{ needs.validate.outputs.source_tag }}
+          DELIVERY_TAG: ${{ needs.validate.outputs.delivery_tag }}
+          EXPECTED_LOCAL_ID: ${{ needs.validate.outputs.expected_local_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(uname -m)" == x86_64 ]] || { echo "M7 transfer runner is not amd64" >&2; exit 1; }
+          root=/tmp/copper-mysql-amd64
+          archive=copper-mysql-amd64.tar.gz
+          image=ghcr.io/soyia/copper_mysql
+          source_tag="$SOURCE_TAG"
+          delivery_tag="$DELIVERY_TAG"
+          install -d -m 0700 "$root"
+          docker pull --platform linux/amd64 "$source_tag"
+          platform_digest="$(
+            docker image inspect --format '{{index .RepoDigests 0}}' "$source_tag" |
+              sed -n 's/^.*@\(sha256:[0-9a-f]\{64\}\)$/\1/p'
+          )"
+          [[ "$platform_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Published image did not expose an immutable repository digest" >&2
+            exit 1
+          }
+          docker tag "$source_tag" "$delivery_tag"
+          local_id="$(docker image inspect --format '{{.Id}}' "$delivery_tag")"
+          architecture="$(docker image inspect --format '{{.Architecture}}' "$delivery_tag")"
+          [[ "$local_id" =~ ^sha256:[0-9a-f]{64}$ && "$architecture" == amd64 ]] || {
+            echo "Exported image identity is not amd64" >&2
+            exit 1
+          }
+          docker save "$delivery_tag" | gzip -n > "$root/$archive"
+          IFS=$'\t' read -r imported_reference imported_id imported_architecture < <(
+            python3 scripts/oci-archive-image-id.py "$root/$archive" "$delivery_tag"
+          )
+          [[ "$imported_reference" == "$delivery_tag" \
+            && "$imported_id" =~ ^sha256:[0-9a-f]{64}$ \
+            && "$imported_architecture" == amd64 ]] || {
+            echo "Offline archive did not expose a valid Docker import identity" >&2
+            exit 1
+          }
+          if [[ -n "$EXPECTED_LOCAL_ID" && "$imported_id" != "$EXPECTED_LOCAL_ID" ]]; then
+            echo "Offline imported image ID does not match the reviewed M7 allowlist" >&2
+            exit 1
+          fi
+          archive_sha="$(sha256sum "$root/$archive" | awk '{print $1}')"
+          archive_bytes="$(stat --format '%s' "$root/$archive")"
+          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          jq -n \
+            --arg role mysql \
+            --arg sourceRepository "$GITHUB_REPOSITORY" \
+            --arg sourceCommit "$SOURCE_COMMIT" \
+            --arg workflowRun "$GITHUB_RUN_ID" \
+            --arg workflowAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg createdAt "$created" \
+            --arg imageRepository "$image" \
+            --arg platform linux/amd64 \
+            --arg platformDigest "$platform_digest" \
+            --arg localId "$local_id" \
+            --arg importedImageId "$imported_id" \
+            --arg archiveName "$archive" \
+            --arg archiveSha256 "$archive_sha" \
+            --argjson archiveBytes "$archive_bytes" \
+            '{format:"copper-image-platform/v1",role:$role,sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,workflowAttempt:$workflowAttempt,createdAt:$createdAt,imageRepository:$imageRepository,platform:$platform,platformDigest:$platformDigest,localId:$localId,importedImageId:$importedImageId,archive:{name:$archiveName,bytes:$archiveBytes,sha256:$archiveSha256}}' \
+            > "$root/image-platform-amd64.json"
+          (cd "$root" && sha256sum "$archive" image-platform-amd64.json > SHA256SUMS-amd64)
+
+      - name: Upload to the controlled private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRANSFER_TAG: ${{ inputs.transfer_draft_tag }}
+          TRANSFER_DRAFT_ID: ${{ inputs.transfer_draft_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private')" == "true" ]] || exit 2
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID")"
+          [[ "$(jq -r '.draft' <<<"$release_json")" == "true" ]] || exit 2
+          [[ "$(jq -r '.tag_name' <<<"$release_json")" == "$TRANSFER_TAG" ]] || exit 2
+          root=/tmp/copper-mysql-amd64
+          for file in \
+            "$root/copper-mysql-amd64.tar.gz" \
+            "$root/image-platform-amd64.json" \
+            "$root/SHA256SUMS-amd64"; do
+            name="$(basename "$file")"
+            existing_id="$(
+              gh api "repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID/assets" |
+                jq -r --arg name "$name" 'first(.[] | select(.name == $name) | .id) // empty'
+            )"
+            if [[ -n "$existing_id" ]]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$existing_id"
+            fi
+            curl \
+              --fail-with-body \
+              --retry 3 \
+              --retry-all-errors \
+              --connect-timeout 15 \
+              --request POST \
+              --user "$GITHUB_ACTOR:$GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID/assets?name=$name" \
+              >/dev/null
+          done
+
+      - name: Log out from GHCR
+        if: always()
+        run: docker logout ghcr.io || true

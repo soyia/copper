@@ -1,0 +1,27 @@
+{
+	admin off
+	default_sni {$COPPER_SITE_ADDRESS}
+}
+
+https://{$COPPER_SITE_ADDRESS} {
+	tls /etc/copper/tls/lan-fullchain.pem /etc/copper/tls/lan-privkey.pem
+	import /etc/caddy/Caddyfile.common
+}
+
+http://{$COPPER_SITE_ADDRESS} {
+	redir https://{$COPPER_SITE_ADDRESS}{uri} 308
+}
+
+# Docker-internal origin used only by the optional Cloudflare Tunnel sidecar.
+# It is never published on the host and keeps the public and LAN hostname equal.
+http://{$COPPER_SITE_ADDRESS}:8080 {
+	import /etc/caddy/Caddyfile.common
+}
+
+http://127.0.0.1:8081 {
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	respond 404
+}

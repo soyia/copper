@@ -1,0 +1,947 @@
+{
+  "formatVersion": "copper-backend-security-evidence/v1",
+  "recordedAt": "2026-10-25T11:06:01.486757+00:00",
+  "baseCommit": "a5fb8a52e9ce07fa35a3db527142b4808382488e",
+  "decision": "APPLICATION_APPLICABILITY_EVIDENCE_ONLY_NOT_RELEASE_APPROVAL",
+  "imageRebuildAndScan": "REQUIRED",
+  "javaVersion": "17.0.12",
+  "database": {
+    "engine": "Oracle MySQL Community",
+    "version": "8.4.13",
+    "isolation": "Task-owned new datadir and databases, private socket and loopback port33068; sparse APFS test volume; no backend service port bound",
+    "publisherSignatureVerified": true,
+    "archiveSha256": "f324f8950e24d4147470bbc6a6ef0b90ef93b91d3fc74154b3d2ba085b44912a"
+  },
+  "productionSourceTree": {
+    "baseCommit": "a5fb8a52e9ce07fa35a3db527142b4808382488e",
+    "algorithm": "SHA256(sorted UTF-8 path + NUL + file SHA256 + LF)",
+    "productionSourceTreeSha256": "7b27a70a489f3cb0439e651d81d28005d5e7dfcfbe5a352c03efea1bc64494c0"
+  },
+  "testSourceSha256": "ed726050698e1b11c2c082e1dc689397ea8087ef40b0cc5379034cb1227e7489",
+  "imageRecipeSha256": "36273b8f4dbb4f66a9bd69da253a7047a2d6fe4753bf73f854f7d5275c7a1d3e",
+  "pomSha256": "7f2c94d41fb8939541969b6521f72586e01cc90044904214faeca7530444c85f",
+  "testedComponents": [
+    {
+      "gav": "org.springframework:spring-webmvc:6.2.19",
+      "sha256": "134f42320cedd31f54f683d2ca9936a4e015c011fb1882a31fa7213e2d8c7e94",
+      "sha1": "836c68c8797106000e44153686b1cfa1a806a998",
+      "bytes": 1095229,
+      "runtimeClasspathVerified": true
+    },
+    {
+      "gav": "org.apache.tomcat.embed:tomcat-embed-core:10.1.61",
+      "sha256": "57b8e4bdb3a49163c3a6a501929240531523c111ff53844c9f82efba60f789f7",
+      "sha1": "6b07a33e029c6467ac15397754f29b7561031976",
+      "bytes": 3730033,
+      "runtimeClasspathVerified": true
+    },
+    {
+      "gav": "org.apache.tomcat.embed:tomcat-embed-el:10.1.61",
+      "sha256": "a72e0e067ae4e5b9aba0b36c7812cbe268c555648355c9d3e662bbff0d07f972",
+      "sha1": "ba4d58e168583cb88b2be29abb7ed338507d3e79",
+      "bytes": 266006,
+      "runtimeClasspathVerified": true
+    },
+    {
+      "gav": "org.apache.tomcat.embed:tomcat-embed-websocket:10.1.61",
+      "sha256": "4b8c0f6506a31f79b9df08385b8fcf7c905ceee2cec2b958d6094a0601b721ef",
+      "sha1": "13d007d90bca6636609a3d0ca9415135742d21e3",
+      "bytes": 289804,
+      "runtimeClasspathVerified": true
+    },
+    {
+      "gav": "com.fasterxml.jackson.core:jackson-core:2.21.8",
+      "sha256": "604ef7765013daf5cde192e40bc4c8412c4ca93f4aaf7bf8e9a62fad1e1026bb",
+      "sha1": "6343fa08a059a4f5afa7411c8c04652f2880d69b",
+      "bytes": 599566,
+      "runtimeClasspathVerified": true
+    },
+    {
+      "gav": "com.fasterxml.jackson.core:jackson-databind:2.21.8",
+      "sha256": "ad77f2285717e2f34c319d988b7c85783a47d0b33f33a501d1fcbf196e61bbaa",
+      "sha1": "c3ebe92d2efdba6ebf85d0eaa05a3a1724dab67e",
+      "bytes": 1713950,
+      "runtimeClasspathVerified": true
+    }
+  ],
+  "renderingScope": {
+    "test": "com.soyia.copperv2.config.RenderingAttackSurfaceMySqlAcceptanceTest",
+    "junit": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "xmlSha256": "9dd073cfaf3499615810a9797360358e0a6b6bf7a9fa5ef8a539ecd4a1fbd50f",
+    "businessControllers": 29,
+    "businessHandlerMethods": 523,
+    "xsltViewBeans": 0,
+    "xsltResolversOrConfiguredViewClasses": 0,
+    "sseOrRenderingReturnTypes": 0,
+    "sseProducesMappings": 0,
+    "businessCatchAllViewMappings": 0,
+    "webFluxStackPresent": false,
+    "springJarMatchesRc8SbomSha1": true,
+    "advisories": [
+      "GHSA-pc63-qcmh-9cmg",
+      "GHSA-j9f9-w8pj-32f8"
+    ],
+    "testProfile": "default",
+    "productionProfileDifference": "Environment validation only; no application profile-conditional view beans or profile-specific resource templates"
+  },
+  "primarySources": {
+    "retrievedAt": "2026-10-25T10:57:51.036875+00:00",
+    "sources": [
+      {
+        "path": "spring-cve-2026-47884.html",
+        "url": "https://spring.io/security/cve-2026-47884/",
+        "sha256": "8b0583c2acbe47da18b45c6ec466194725aab28f2697867409ac0b29262aeccd",
+        "bytes": 401567,
+        "status": "PUBLISHER_ORIGINAL_DOWNLOADED"
+      },
+      {
+        "path": "spring-cve-2026-47890.html",
+        "url": "https://spring.io/security/cve-2026-47890/",
+        "sha256": "ebc7719c08e1c78677a25d442d3f0f9e68dbea19aa544a17a24cb2a9ea7df8a4",
+        "bytes": 401417,
+        "status": "PUBLISHER_ORIGINAL_DOWNLOADED"
+      },
+      {
+        "path": "tomcat-security-10.html",
+        "url": "https://tomcat.apache.org/security-10.html",
+        "sha256": "275d796c5a1ccf618a467e90bf6a1e754cc67fb1e1a4f4b3d0240c9507da1321",
+        "bytes": 126215,
+        "status": "PUBLISHER_ORIGINAL_DOWNLOADED"
+      },
+      {
+        "path": "jackson-databind-ghsa-m8xf-2cr7-77ph.html",
+        "url": "https://github.com/FasterXML/jackson-databind/security/advisories/GHSA-m8xf-2cr7-77ph",
+        "sha256": "191649fd08390ac35c6631c14f69dcde26b570cb45dae29819e3f2a019630999",
+        "bytes": 219639,
+        "status": "PUBLISHER_ORIGINAL_DOWNLOADED"
+      }
+    ]
+  },
+  "unitAndPackage": {
+    "suites": 77,
+    "tests": 227,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reports": [
+      {
+        "suite": "com.soyia.copperv2.BusinessExportMigrationTest",
+        "xmlSha256": "b912d04d8a40ec11702bb7a96f641e7a1a8a858abc2f373f2ec240c61d3eaf3a",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.CopperBarPresetDimensionsMigrationTest",
+        "xmlSha256": "bb0cfd5adb3903f1b6d124020f05e9297ab0da6c727d9cd7cb8982dd54201925",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.DatabaseV1BaselineTest",
+        "xmlSha256": "c7d2684772f967616d252383b4094779db2642a540a07122a537af71f2a5f1aa",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.SecuritySessionAuditMigrationTest",
+        "xmlSha256": "53a67e8b4f9a6343935c03ee2629bcf3bdca2ff6c75b02e225cf635516de0924",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.SystemUpgradeAuditMigrationTest",
+        "xmlSha256": "d5f15044432c2c3f4881ce4be2673baabf2fb1f74c418b41a1d6ddfb0fffcc21",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.TableNamingConventionTest",
+        "xmlSha256": "be2652b63a5642bca425213b6a4c590239810d863a72983eb63688b45d13de06",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.ApiExceptionHandlerTest",
+        "xmlSha256": "22fd81dfb52cd4095e9879f0099957d9ea03e4bce3991397e5dcdee3e400883c",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.BlankTestProfileContractTest",
+        "xmlSha256": "fc423d1b3d4c4f1a35063b1f3cf27e16fd39c97309526bcbcfad34c4bf07486e",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.DatabaseSessionTimezoneTest",
+        "xmlSha256": "94caf737591580f22f08e52cbaf9df79f347764e0cc06234d4d95fb91c097b40",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.DockerSecretEnvironmentPostProcessorTest",
+        "xmlSha256": "64e0350997cfea26297f38b24c5c0fea1132a101abf1f07689545495baa798d3",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.FlywayMigrationFailureAnalyzerTest",
+        "xmlSha256": "bba9a197c49a918251d802e8eb2bd2820dfdd7f2559e943704060e3548d41958",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.ProductionEnvironmentValidatorTest",
+        "xmlSha256": "67138b979921e85a39baf78fae23cd1566bd852c18e29d9fd5c907908d88e933",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.ProductionImageBaselineTest",
+        "xmlSha256": "630e113802b6e52120ba88ca1f2c81f23c0f1af417931403680e8e864897e46c",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.SensitiveLogSanitizerTest",
+        "xmlSha256": "8bcb19152803e32be67f2068afe9e3525c51f251060644e6c59df04da5bd57bd",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.config.WebConfigTest",
+        "xmlSha256": "736bc908face0b5573305082564d798d652bea2964308bbd69b78cc7ca366213",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.controller.OperationalLiteSuiteControllerTest",
+        "xmlSha256": "09aebd6ec54e5a1914d6130e8b08eaaa66dcd8bec593ae3067a7c79f6a011f26",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.migration.CoreReferentialIntegrityMigrationContractTest",
+        "xmlSha256": "5cf4070582581684b5c5bdf6a3efb6f0aa789419cd4da0690e8bbf3e2bf31c08",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.AuthServiceBootstrapPasswordTest",
+        "xmlSha256": "38ffe296f01277af89ec9b1bc23a2c27154c113b9837ef43a0fb04a72322628f",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.AuthServiceSecurityContractTest",
+        "xmlSha256": "fcf4df6ede8466c64491d2c58e2e108a5571a6ffe9065dba6c1a131d6f048079",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.BootstrapCredentialServiceTest",
+        "xmlSha256": "3dff7f9d7948a40f8791b8e43ce414ceb155a9871088c422567f063294bcaba1",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.DefaultRolePermissionAcceptanceContractTest",
+        "xmlSha256": "dbeaa454f9cb37fb67332036d1f97905e862788e23c86af09aca74c28ab19343",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.SecurityAuditServiceTest",
+        "xmlSha256": "0b14c2e57b1f6c12e70bd618c4685b12a1d30bcac010d5e986149d8eaa7aa5ae",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.SecurityRequestBodyAdviceTest",
+        "xmlSha256": "3dfe0d627538d0f7848e6e1bfe2611357fa925afd4d72b8cdc9d948f1225dcca",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.security.SessionCookieFactoryTest",
+        "xmlSha256": "d985b97a849121548cbdc319d5d82123695d4f124f29a516f3a9b56157b9171e",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.AccountingGeneralLedgerContractTest",
+        "xmlSha256": "51e28a83e21a98e4e6571093f38c9163b5bc62f7decb3ec2ae168ac523fe19c9",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.AccountingRuleCoverageContractTest",
+        "xmlSha256": "faa2e2536f2baadb10f4df83008cd225dde93ec7504f1c04b1353ac7c4a2af40",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.BankStatementFileParserTest",
+        "xmlSha256": "8421e9051e577a5cf7d82937f680b3a89b75958d23efdc21ca086cfe2269345c",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.BankStatementImportContractTest",
+        "xmlSha256": "4f8e62410b3e5f874675266366819aeac65bf0110171a5de614f2f51862dbc01",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.BusinessExportCatalogTest",
+        "xmlSha256": "fb71e0c180a7bd4231cf43af89bd705f73c1df5dbd73559321934f1c6a32f6e8",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.BusinessExportFormatTest",
+        "xmlSha256": "c18336ca487a995f0a6f438d1f54330b1cff03bfc14f6e823579a9955f10a285",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ComplexProductCatalogContractTest",
+        "xmlSha256": "07a9aae8663360c41cb13a66c7c09bdb6b4af21de0743347c4ff4747e26b50df",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ComplexProductMasterContractTest",
+        "xmlSha256": "81f62a7cff4b3923d5e1165fafff8872475f84a10fcfed96840f6dbf564629e7",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.CrmIndependentDomainContractTest",
+        "xmlSha256": "9c9fef5853dfa13511543c95b739dd194db07166691c10f76d00cd8a44994858",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.DirectTradeContractTest",
+        "xmlSha256": "18434fc2c8e7223d5560afd79091225263d3ce0ff10011cb6ea456905c8f5b13",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ElectronicCredentialParserTest",
+        "xmlSha256": "abe68ba48358582574f44ae0e817e94dcd7b9fcc04fadba9ce318fd9ffa0504b",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ElectronicEvidenceArchiveContractTest",
+        "xmlSha256": "47b8c899e02b824e5342cdd283de22a19bbdac42bbc4209edd75478442034f9a",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp05TreasuryContractTest",
+        "xmlSha256": "a8b833660c1201df488fad26e5da2050eb5c6d2f7db57ec1efabbe68f28bcbff",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp06LandedCostContractTest",
+        "xmlSha256": "d45567c260d1c528431f112ee7958cf3b270ead921593dbb0284716d2d5e53f0",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp07SalesRiskContractTest",
+        "xmlSha256": "2a79eccb6e35e1e2c295d96f9d1cb59c3116a782ef7f4f61cb0f47e6ce306857",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp08AtpContractTest",
+        "xmlSha256": "b2589eca175a45a6fe762c8a2d016f1f4290add293e67b1b19bb14240f6ad5b1",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp09PriceCenterContractTest",
+        "xmlSha256": "d549eead20c1fb87ccf0ac9989a38c0fb576df8a0ef9df81eaeaae46c17d78fa",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp12TaxComplianceContractTest",
+        "xmlSha256": "f204b4a675bdae97da357ef2cf38b0027db2b7d7db9203d5ebe62ec73e3b6e7f",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp15RiskExceptionContractTest",
+        "xmlSha256": "d64dd43790f968fbab0febf23f416244059ea70f8deda32843d1afffb0d19c15",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp18DataMigrationContractTest",
+        "xmlSha256": "1e7983367b9219e7e8edd799c491f21ea8ad78b6b03dca6855befa2f0e3b8329",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.FifteenProductCategoryContractTest",
+        "xmlSha256": "c953020668b8657b5e5233d5e11473906795b3579f60cead8491fcffff2cd408",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.FinancialReportsBankCloseContractTest",
+        "xmlSha256": "462aa5ffe91b983d043b5118a6915b36b6c2954665d876c997c647f1922c5013",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.HongtaiPackageLabelParserTest",
+        "xmlSha256": "4cdc349e8189c9f7c7b37c0200a243e9ec0251e73840d6dfc9aeec7ce4221d1f",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.InventoryCompletionContractTest",
+        "xmlSha256": "53b0843a10cd93a6f8553d3e456504a934dba7a5bdff5591abea8aebadc0ce23",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.LightweightTradingOperationsContractTest",
+        "xmlSha256": "4106e88123f999cd50ce170e4739d11fd3f41bdcffaabc1c1d25ccb5dabc20cb",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.LocalFileStorageServiceTest",
+        "xmlSha256": "35c0144f87f2aa521f31679b8903870f13354903fca8176c5e120680810790e3",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.M703BusinessSafetyContractTest",
+        "xmlSha256": "6bd578d0ec1f5dc349e77c18acc2b515d5418c27899d16f5045659b695198e99",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.OperationalLiteSuiteContractTest",
+        "xmlSha256": "1460a005bfd312902fc6bf4d1f8718c029bd99f65b602f624eceaad266423738",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.OperationalQuantityPrecisionMigrationContractTest",
+        "xmlSha256": "9d0760b6be85860f0839f1591a744572d891f0161db238ac0fea7c87c75794a2",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.OperationalQuantityPrecisionTest",
+        "xmlSha256": "42eab1d4b9ab069f2b89c736677c64f18090d72609966364bf1bff5bc1c3a839",
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.OwnerOperationsDashboardContractTest",
+        "xmlSha256": "4a67e1b660abe2e8b5794d8dc6fed0af5cc9ba7dadde29a40602055d4a3a8911",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PackageLabelProductMatcherTest",
+        "xmlSha256": "73c7e291cf5ec2435da57fde1eb580a77a619be8dd64a0f8267a3d90386f66c3",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PackagingServiceTest",
+        "xmlSha256": "797dccd6a4d54ef1e6e61e368fc3fc0f7fd3af2d074f120525afed8e7161fb3f",
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PaddleOcrClientTest",
+        "xmlSha256": "d4a80625c1063c73cb7a12945316d7f7a7312cfd72facf5c01ca0a23a3be1850",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PartnerFundAdjustmentContractTest",
+        "xmlSha256": "2402bec5687635a9e1298541f2927621ff9a95dfb212cacb854679a69c988a40",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PartnerMasterValidationContractTest",
+        "xmlSha256": "b99e3a5190fad2718dabe56b9793667ad3e8f3b396823e21510548edc9f7ba1a",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PaymentAllocationFoundationContractTest",
+        "xmlSha256": "567c68dd1a9102626714524e73d4babc1b7070031eda983672e76a36c4cd8f0e",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PaymentLinkageContractTest",
+        "xmlSha256": "865bfda436ff4de079ef485a3cfc6d6f97f37191c83fe240deacdf096f98109a",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductIdentitySignatureTest",
+        "xmlSha256": "033f248da0d8f6794f7c8c6c22eb2dabfbbce0a776a586d5831803c7e3b8c65c",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductImportContractTest",
+        "xmlSha256": "ea7c7615e6c4bf877bfabffa551c07264e3a4c1b2a269465fe281658b3dcc775",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductImportFileParserTest",
+        "xmlSha256": "b5d2bc33c8c7b5989ad09232b3873907c4ce3901ab39508833d2fc4618add068",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductImportReferenceNormalizerTest",
+        "xmlSha256": "cc437ccd00259b9423ed5f7d49d2debef8f944164f1ab964d14cd21103bd96c2",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductMasterDataPermissionTest",
+        "xmlSha256": "95988a7d87d55c4f06f35e0f2a9bc55d680af6ad737117ed2f82829e948deb38",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductMasterIntegrityContractTest",
+        "xmlSha256": "8107ced35b4413c441a4e0053a855b245daf713905f5c1f4728c35edfacc8b66",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductMasterMigrationHardeningContractTest",
+        "xmlSha256": "8727ac6df283ba103537ee04b92bb1b247da949933ba22780a3e024b1814df2c",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductMasterRevisionReadContractTest",
+        "xmlSha256": "e6639964744e4dd901be34102066a71035c85da199d3665ab0f16a84733b199d",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductScopeAndLifecycleContractTest",
+        "xmlSha256": "9c4062d6f860f2e3fabb2957081103d4cf0052e7137e5aef2a3dd174b1c91848",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.SettlementReportContractTest",
+        "xmlSha256": "4d11bdd23ee640b39f26cc7558858895e12faa0134ea6f7bd7df4e1f0bf8ee86",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.StorageCapacityServiceTest",
+        "xmlSha256": "22156556b49d5cd7c1fbf37eadf69c545f07950f5520483fcb478cb24d5b0058",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.TaxInvoiceReconciliationContractTest",
+        "xmlSha256": "7a3ba72958efa2c64288d3aa1b1bd11a8815efeb94de15117f6781a1484b3ef1",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.TaxPriceContractTest",
+        "xmlSha256": "246a4e9076b1bbcdbd2336380951988db6f0313e45d4a0d41128647a8f317e91",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.TrustedTimeSafetyServiceTest",
+        "xmlSha256": "2e28ac75710e2b39dc847e986df965a2d2c68f5dec6149fe378259af9adc74c9",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.UnitLookupNormalizerTest",
+        "xmlSha256": "d12c1015289536f4b3ec608ee6c1450eb1b06c252f5f8c85244ac9ffa1b29192",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "currentReleaseMySql": {
+    "suites": 23,
+    "tests": 98,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "reports": [
+      {
+        "suite": "com.soyia.copperv2.config.RenderingAttackSurfaceMySqlAcceptanceTest",
+        "xmlSha256": "9dd073cfaf3499615810a9797360358e0a6b6bf7a9fa5ef8a539ecd4a1fbd50f",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.migration.NonTradePackagingReferenceMigrationMySqlAcceptanceTest",
+        "xmlSha256": "2d6eecdda7d869dcf716a026cbfe02aff7823bbc311dc6ec69988bec4787af5a",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ComplexProductCatalogMySqlAcceptanceTest",
+        "xmlSha256": "9c9522305b1b33dc4c1412ca15681ced73098855781f6a680f38409c71c1a793",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.DirectTradeMySqlAcceptanceTest",
+        "xmlSha256": "8a33ee296498c7136795a24056a0bc77115432e6fb3e817ef70cc70633b0da99",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp04TaxPriceMySqlAcceptanceTest",
+        "xmlSha256": "5ece69a2f29b83f175a1df52a06f82f6de8720dd1a6157c81cf26331e6c7e818",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp05TreasuryMySqlAcceptanceTest",
+        "xmlSha256": "c80d9c3e0a58852e2942b890c35268caafba87535fc24737fee38c26dfd03705",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp06LandedCostMySqlAcceptanceTest",
+        "xmlSha256": "cf35ea71ceba3664816c5a8e877407287061f7e1df24fb72eed1573d18afbb79",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp07SalesRiskMySqlAcceptanceTest",
+        "xmlSha256": "a7eca67c215a2d5e151ecee10c6b92302dae761932e0870aebd93c0862c167c1",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp08AtpMySqlAcceptanceTest",
+        "xmlSha256": "9c12102e66386d0ed6c24f8da415c7524fb593d54f3d1bf2715975ad84781b16",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp09PriceCenterMySqlAcceptanceTest",
+        "xmlSha256": "e3e487ee1921b9f3369f437bc6ea0b2e3911def8f898ae0f26f5fc8d3a8a2306",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp12TaxComplianceMySqlAcceptanceTest",
+        "xmlSha256": "d1b98bf7ad77a5eb37659c16644b455c739023bb390983e0ea7fc1fb97a79687",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp15RiskExceptionMySqlAcceptanceTest",
+        "xmlSha256": "78fbbc93b3117149512f0dd986055e424ad2ed414e1ae0dba23ae3359fce6c03",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.Erp18DataMigrationMySqlAcceptanceTest",
+        "xmlSha256": "079caf4ee4b5adf93c02aa83b8143b0015e796443d306ad26c565708590f2388",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ErpMonthEndMySqlAcceptanceTest",
+        "xmlSha256": "3cc86d1e09f1fe1f6aef7a09ff7ff045ff2124df9b51edc16b7b639b9e063fb2",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.FifteenProductCategoryMySqlAcceptanceTest",
+        "xmlSha256": "16a639b39c750cc5d2e1c4e54cefb5f3d1e9a7e114cb9a5c6a306b00b2bd80d7",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.FinancialCloseDirtyDataMySqlAcceptanceTest",
+        "xmlSha256": "1af3385eac7f60e6c2f24240d63ed09d6d90d88ed1fee1afae1d5ab8c528e4ed",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.LightweightTradingOperationsMySqlAcceptanceTest",
+        "xmlSha256": "d740de392e63ff79fb1d4fe62ebf28517b652217c1de7ff65788b2fa0ec99a36",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.NonTradePackagingReferenceBehaviorMySqlAcceptanceTest",
+        "xmlSha256": "f631a821319d6f1f8c48c43a41d0f5d364749ba51ad60e733ef355a9c97529e8",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PartnerBusinessGuardConcurrencyMySqlAcceptanceTest",
+        "xmlSha256": "a84ef051705d9aa064c6f564cf4ffa401ed2c1e9eb94e4b8a696ce09123c6137",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PartnerFundAdjustmentMySqlAcceptanceTest",
+        "xmlSha256": "0d59c2827a7295ed37a496fed4a56d7bb58f6f5d809edb27273830e57d78106e",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.PartnerPostingSafetyMySqlAcceptanceTest",
+        "xmlSha256": "0240cb89dc11ac6b6a2b756851015c76ecdff0f11d67168cb1634e7642081c1f",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.ProductMasterBehaviorMySqlAcceptanceTest",
+        "xmlSha256": "84a5e2b665a9d104bf0d6d025c93a60e2f0dce4d0b750dbbd03097c28bb90939",
+        "tests": 30,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.soyia.copperv2.service.SettlementReportMySqlAcceptanceTest",
+        "xmlSha256": "d012cdbee1b53a40f9799bee2d804f34f39e390d9316c6e9ca5b60fbcf4d54ed",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "localJar": {
+    "sha256": "60184970fbc0f2b52ff1b7d9dcf0bcdec39e057ce8bc20bf5bc5704cc0d9d4f3",
+    "scope": "Local verification artifact only; final image digest and embedded JAR hashes must be re-bound by release pipeline"
+  }
+}

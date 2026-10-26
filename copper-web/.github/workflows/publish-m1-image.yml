@@ -1,0 +1,361 @@
+name: Publish Web multi-architecture image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-m1-image.yml
+      - Dockerfile
+      - Caddyfile
+      - package.json
+      - pnpm-lock.yaml
+      - config/m6-*.json
+      - scripts/**
+      - src/**
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Semantic Copper release version, or source for an automatic source-build version
+        required: true
+        default: source
+        type: string
+      internal_rehearsal_without_artifacts:
+        description: INTERNAL_REHEARSAL_ONLY - publish platform images when Actions artifact quota is unavailable
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-web-${{ github.ref }}-${{ inputs.release_version || 'source' }}
+  cancel-in-progress: false
+
+jobs:
+  confidentiality:
+    name: Block confidential source from published artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete reviewed history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+
+      - name: Run strict Release confidentiality audit
+        run: |
+          set -Eeuo pipefail
+          node scripts/security/audit-repositories.mjs \
+            --repo copper_web=. \
+            --config config/m6-confidentiality-audit.json \
+            --baseline config/m6-known-confidentiality-findings.json \
+            --gate strict \
+            --scope all \
+            --report "$RUNNER_TEMP/copper-web-release-confidentiality-audit.json"
+
+      - name: Upload redacted Release audit evidence
+        if: always()
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' && inputs.internal_rehearsal_without_artifacts }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: copper-web-release-confidentiality-audit-${{ github.sha }}
+          path: ${{ runner.temp }}/copper-web-release-confidentiality-audit.json
+          if-no-files-found: error
+          retention-days: 14
+
+  test:
+    name: Test reviewed Web source
+    needs: confidentiality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Run production image contract tests
+        run: |
+          set -Eeuo pipefail
+          corepack enable
+          corepack prepare pnpm@9.15.7 --activate
+          pnpm install --frozen-lockfile
+          pnpm test:production
+          bash tests/prune-actions-image-artifacts.sh
+
+  build-platform:
+    name: Build native ${{ matrix.platform }}
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Resolve immutable build identity
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$REQUESTED_VERSION" != "source" ]]; then
+            release_version="$REQUESTED_VERSION"
+          else
+            release_version="0.0.0-m5.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          [[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Release version must be semantic: $release_version" >&2
+            exit 2
+          }
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish native platform image
+        id: image
+        env:
+          ARCH: ${{ matrix.arch }}
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          CREATED: ${{ steps.release.outputs.created }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(uname -m)" == "${ARCH/amd64/x86_64}" || ( "$ARCH" == "arm64" && "$(uname -m)" == "aarch64" ) ]] || {
+            echo "Runner architecture does not match $PLATFORM: $(uname -m)" >&2
+            exit 1
+          }
+          docker buildx create --driver docker-container --name copper-builder --use
+          docker buildx inspect --bootstrap
+          docker buildx build \
+            --platform "$PLATFORM" \
+            --provenance=false \
+            --sbom=false \
+            --build-arg "COPPER_VERSION=$RELEASE_VERSION" \
+            --build-arg "COPPER_REVISION=$GITHUB_SHA" \
+            --build-arg "COPPER_BUILD_TIME=$CREATED" \
+            --tag "$IMAGE:sha-$GITHUB_SHA-$ARCH" \
+            --metadata-file /tmp/copper-image-metadata.json \
+            --push \
+            .
+          digest="$(jq -r '."containerimage.digest" // empty' /tmp/copper-image-metadata.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Build did not return an immutable platform digest" >&2
+            exit 1
+          }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Export exact platform image and evidence
+        env:
+          ARCH: ${{ matrix.arch }}
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          CREATED: ${{ steps.release.outputs.created }}
+        run: |
+          set -Eeuo pipefail
+          output="/tmp/copper-web-$ARCH"
+          install -d -m 0700 "$output"
+          exact="$IMAGE@$DIGEST"
+          delivery_tag="$IMAGE:m5-delivery-$GITHUB_SHA-$ARCH"
+          archive="copper-web-$ARCH.tar.gz"
+          docker pull --platform "$PLATFORM" "$exact"
+          docker tag "$exact" "$delivery_tag"
+          local_id="$(docker image inspect --format '{{.Id}}' "$delivery_tag")"
+          architecture="$(docker image inspect --format '{{.Architecture}}' "$delivery_tag")"
+          [[ "$local_id" =~ ^sha256:[0-9a-f]{64}$ && "$architecture" == "$ARCH" ]] || {
+            echo "Exported image identity does not match $PLATFORM" >&2
+            exit 1
+          }
+          docker save "$delivery_tag" | gzip -n > "$output/$archive"
+          archive_sha="$(sha256sum "$output/$archive" | awk '{print $1}')"
+          archive_bytes="$(stat --format '%s' "$output/$archive")"
+          jq -n \
+            --arg role web \
+            --arg sourceRepository "$GITHUB_REPOSITORY" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg workflowRun "$GITHUB_RUN_ID" \
+            --arg workflowAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg createdAt "$CREATED" \
+            --arg imageRepository "$IMAGE" \
+            --arg platform "$PLATFORM" \
+            --arg platformDigest "$DIGEST" \
+            --arg localId "$local_id" \
+            --arg archiveName "$archive" \
+            --arg archiveSha256 "$archive_sha" \
+            --argjson archiveBytes "$archive_bytes" \
+            '{format:"copper-image-platform/v1",role:$role,sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,workflowAttempt:$workflowAttempt,createdAt:$createdAt,imageRepository:$imageRepository,platform:$platform,platformDigest:$platformDigest,localId:$localId,archive:{name:$archiveName,bytes:$archiveBytes,sha256:$archiveSha256}}' \
+            > "$output/image-platform-$ARCH.json"
+          (cd "$output" && sha256sum "$archive" "image-platform-$ARCH.json" > SHA256SUMS-$ARCH)
+
+      - name: Upload native platform artifact
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.internal_rehearsal_without_artifacts) }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: copper-web-platform-${{ matrix.arch }}-${{ github.sha }}
+          path: /tmp/copper-web-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Log out from GHCR
+        if: always()
+        run: docker logout ghcr.io || true
+
+  prune-image-artifacts:
+    name: Keep only the two most recent successful image builds
+    if: ${{ always() && github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.internal_rehearsal_without_artifacts) }}
+    needs:
+      - build-platform
+      - publish-manifest
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out reviewed cleanup policy
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Delete image artifacts older than the two most recent successful builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPPER_IMAGE_ARTIFACT_PREFIX: copper-web-
+          COPPER_IMAGE_WORKFLOW_FILE: publish-m1-image.yml
+          COPPER_KEEP_SUCCESSFUL_VERSIONS: "2"
+          COPPER_CURRENT_BUILD_SUCCESSFUL: ${{ needs.publish-manifest.result == 'success' }}
+          COPPER_INCLUDE_CURRENT_RUN: "true"
+        run: bash scripts/ci/prune-actions-image-artifacts.sh
+
+  publish-manifest:
+    name: Publish immutable two-platform manifest and BOM
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.internal_rehearsal_without_artifacts) }}
+    needs: build-platform
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download both native platform artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: copper-web-platform-*-${{ github.sha }}
+          path: /tmp/copper-web-multiarch
+          merge-multiple: true
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Validate children and publish top-level manifest
+        id: manifest
+        env:
+          REQUESTED_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -Eeuo pipefail
+          root=/tmp/copper-web-multiarch
+          (cd "$root" && sha256sum --check SHA256SUMS-amd64)
+          (cd "$root" && sha256sum --check SHA256SUMS-arm64)
+          python3 - "$root" web "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_RUN_ID" <<'PY'
+          import json, pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          role, repository, commit, run = sys.argv[2:]
+          records = [json.loads((root / f"image-platform-{arch}.json").read_text()) for arch in ("amd64", "arm64")]
+          if [item.get("platform") for item in records] != ["linux/amd64", "linux/arm64"]:
+              raise SystemExit("platform evidence must contain amd64 and arm64 exactly once")
+          for item in records:
+              if item.get("format") != "copper-image-platform/v1" or item.get("role") != role:
+                  raise SystemExit("platform evidence format or role mismatch")
+              if item.get("sourceRepository") != repository or item.get("sourceCommit") != commit or item.get("workflowRun") != run:
+                  raise SystemExit("platform evidence is not bound to this workflow")
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(item.get("platformDigest", ""))):
+                  raise SystemExit("platform digest is not immutable")
+          PY
+          image="$(jq -r '.imageRepository' "$root/image-platform-amd64.json")"
+          amd64_digest="$(jq -r '.platformDigest' "$root/image-platform-amd64.json")"
+          arm64_digest="$(jq -r '.platformDigest' "$root/image-platform-arm64.json")"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$REQUESTED_VERSION" != "source" ]]; then
+            release_version="$REQUESTED_VERSION"
+          else
+            release_version="0.0.0-m5.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          [[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Release version must be semantic: $release_version" >&2
+            exit 2
+          }
+          docker buildx imagetools create \
+            --tag "$image:$release_version" \
+            --tag "$image:sha-$GITHUB_SHA" \
+            "$image@$amd64_digest" \
+            "$image@$arm64_digest"
+          digest="$(docker buildx imagetools inspect "$image:sha-$GITHUB_SHA" | awk '$1 == "Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Published manifest has no immutable digest" >&2
+            exit 1
+          }
+          raw="$(docker buildx imagetools inspect --raw "$image@$digest")"
+          for platform in linux/amd64 linux/arm64; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            count="$(jq --arg os "$os" --arg arch "$arch" '[.manifests[] | select(.platform.os == $os and .platform.architecture == $arch)] | length' <<<"$raw")"
+            [[ "$count" == 1 ]] || { echo "Manifest is missing unique $platform child" >&2; exit 1; }
+          done
+          [[ "$(jq '.manifests | length' <<<"$raw")" == 2 ]] || { echo "Manifest contains unexpected children" >&2; exit 1; }
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release BOM and checksum inventory
+        env:
+          IMAGE: ${{ steps.manifest.outputs.image }}
+          MANIFEST_DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          root=/tmp/copper-web-multiarch
+          jq -s \
+            --arg role web \
+            --arg sourceRepository "$GITHUB_REPOSITORY" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg workflowRun "$GITHUB_RUN_ID" \
+            --arg image "$IMAGE@$MANIFEST_DIGEST" \
+            --arg manifestDigest "$MANIFEST_DIGEST" \
+            '{format:"copper-image-bom/v1",role:$role,sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,image:$image,manifestDigest:$manifestDigest,platforms:sort_by(.platform)}' \
+            "$root/image-platform-amd64.json" "$root/image-platform-arm64.json" \
+            > "$root/image-bom.json"
+          (cd "$root" && sha256sum copper-web-amd64.tar.gz copper-web-arm64.tar.gz image-platform-amd64.json image-platform-arm64.json image-bom.json > SHA256SUMS)
+          {
+            echo '## Copper Web multi-architecture image'
+            echo
+            echo "- Source commit: \`$GITHUB_SHA\`"
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- Immutable image: \`$IMAGE@$MANIFEST_DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload multi-architecture release artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: copper-web-multiarch-${{ github.sha }}
+          path: /tmp/copper-web-multiarch/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Log out from GHCR
+        if: always()
+        run: docker logout ghcr.io || true

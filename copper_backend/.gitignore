@@ -1,0 +1,43 @@
+# Build output
+target/
+out/
+*.class
+*.jar
+*.war
+*.ear
+!.mvn/wrapper/maven-wrapper.jar
+
+# Maven
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties
+
+# IDEs and editors
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+application-local.yml
+application-*.local.yml
+
+# Logs and runtime dumps
+logs/
+data/
+*.log
+hs_err_pid*
+replay_pid*
+
+# OS and temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.swp
+*.swo
+*~

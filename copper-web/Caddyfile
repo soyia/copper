@@ -1,0 +1,51 @@
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	root * /srv
+	encode zstd gzip
+
+	request_body {
+		max_size 12MB
+	}
+
+	log {
+		output stdout
+		format json
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle /readyz {
+		rewrite * /api/actuator/health/readiness
+		reverse_proxy {$COPPER_BACKEND_URL:http://copper-backend:8191}
+	}
+
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy {$COPPER_BACKEND_URL:http://copper-backend:8191}
+	}
+
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle {
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		try_files {path} /index.html
+		file_server
+	}
+}

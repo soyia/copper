@@ -1,0 +1,19 @@
+Caddy v2.11.7+copper.security.1 — Copper dependency security rebuild
+
+Upstream: Caddy v2.11.7, github.com/caddyserver/caddy/v2
+Exact upstream commit: 72dd0fb067f6d7826c7f79907670ba4a713bfe37
+Copyright 2015 Matthew Holt and The Caddy Authors
+Licensed under Apache-2.0; the original full LICENSE is retained here.
+
+main.go is the unchanged upstream standard entry point, including time/tzdata
+and modules/standard. This is a Copper rebuild, not the upstream release binary.
+The compiler is Go 1.27.3. go.mod/go.sum lock the complete module graph,
+including the security override golang.org/x/net v0.60.0. The resolved graph
+also uses github.com/klauspost/compress v1.20.1, golang.org/x/text v0.42.0,
+golang.org/x/crypto v0.57.0 and google.golang.org/grpc v1.83.2.
+
+The build verifies the module cache and uses -mod=readonly, CGO_ENABLED=0 and
+GOTOOLCHAIN=local. The custom version explicitly identifies this modified build.
+Third-party dependency LICENSE/NOTICE bodies, copyright attribution and source
+availability must be bound to the final candidate SBOM and included in the
+release rights evidence; this source-build note does not replace those texts.

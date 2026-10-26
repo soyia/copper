@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Raw binary analysis is delivered inside the hash-bound security evidence bundle,
+# not duplicated inside the runtime deployment source archive.
+releases/**/govulncheck-gosu.json.gz export-ignore
+
+# Public source distributions include historical regression inputs.
+releases/**/govulncheck-gosu.json.gz -export-ignore

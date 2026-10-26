@@ -1,0 +1,39 @@
+{
+  "branch": "main",
+  "formalBlockers": [
+    "M6-02",
+    "M6-03",
+    "M6-05"
+  ],
+  "formalRelease": "FORMAL_RELEASE_BLOCKED",
+  "format": "copper-github-source-rehearsal/v1",
+  "generatedAt": "2026-07-16T20:18:17.379209Z",
+  "purpose": "INTERNAL_REHEARSAL_ONLY",
+  "repositories": [
+    {
+      "branch": "main",
+      "commit": "af6ef0536bc12e4b85577f729b1925f2cde12f7f",
+      "origin": "https://github.com/soyia/copper_web.git",
+      "path": "sources/copper_web",
+      "role": "web",
+      "tree": "1092a09ad0acc6888ba3b728a608bf2da37a7ceb"
+    },
+    {
+      "branch": "main",
+      "commit": "f32e6aec06fa730f777c1bc3761fed9d33540b22",
+      "origin": "https://github.com/soyia/copper_backend.git",
+      "path": "sources/copper_backend",
+      "role": "backend",
+      "tree": "428ca2ae09b26c81a2cdd32296ca37e328cf4255"
+    },
+    {
+      "branch": "main",
+      "commit": "ccefecb48274357d88f3a5286187964f32ebf5f0",
+      "origin": "https://github.com/soyia/copper_deploy.git",
+      "path": "sources/copper_deploy",
+      "role": "deploy",
+      "tree": "385af32b1e70f3cb9db0eebdebf2ed97e42007b0"
+    }
+  ],
+  "sourceMode": "AUTHENTICATED_GITHUB_INTERNAL"
+}

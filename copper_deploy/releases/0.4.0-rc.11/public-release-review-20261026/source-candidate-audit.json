@@ -1,0 +1,78 @@
+{
+  "format": "copper-confidentiality-audit/v1",
+  "scannerVersion": "1.0.1",
+  "generatedAt": "2026-10-26T00:55:46.039Z",
+  "decision": "BLOCK",
+  "policy": {
+    "failClosed": true,
+    "gateMode": "strict",
+    "matchingContentStored": false,
+    "originalPathsStored": false,
+    "historyScope": "all-reachable-refs-in-non-shallow-clone",
+    "releaseScope": "explicit-candidate-directories-before-publication"
+  },
+  "repositories": [],
+  "releaseCandidates": [
+    {
+      "name": "copper_source",
+      "current": {
+        "filesDiscovered": 1065,
+        "filesScanned": 1065,
+        "bytesScanned": 13023466,
+        "largeFiles": 0
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "blocking": 2,
+    "newBlocking": 2,
+    "knownBlockers": 0,
+    "approved": 0,
+    "byCategory": {
+      "customer_data": 2
+    },
+    "byRepository": {
+      "release_copper_source": 2
+    },
+    "byScope": {
+      "release-candidate": 2
+    }
+  },
+  "findings": [
+    {
+      "findingId": "de12b7ababc57be11708a54424424d76094d97ee9f64efaf2b8ca8e2c696655e",
+      "repository": "release_copper_source",
+      "scope": "release-candidate",
+      "category": "customer_data",
+      "severity": "critical",
+      "ruleId": "DATA-PATH-BACKUP-EXPORT",
+      "requiredDisposition": "remove-and-confirm-source-destruction",
+      "disposition": "blocking",
+      "approval": null,
+      "objectKind": "file",
+      "objectId": "2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d",
+      "pathHint": "release_copper_source/_root/_redacted_86a5dd894f52.gz",
+      "pathSha256": "86a5dd894f5297af91a1ba30440d369690d9872286e2d9b5bb728708e420d73f",
+      "matchCount": 1,
+      "locationCount": 1
+    },
+    {
+      "findingId": "e0949d4155076a2dff4601da7fe4be34bcb7bda69fa88b628230aff57e9e66c9",
+      "repository": "release_copper_source",
+      "scope": "release-candidate",
+      "category": "customer_data",
+      "severity": "critical",
+      "ruleId": "DATA-PATH-BACKUP-EXPORT",
+      "requiredDisposition": "remove-and-confirm-source-destruction",
+      "disposition": "blocking",
+      "approval": null,
+      "objectKind": "file",
+      "objectId": "15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb",
+      "pathHint": "release_copper_source/_root/_redacted_3d122279f285.gz",
+      "pathSha256": "3d122279f2850603a214db76faf2b4f5b58bfd3717ddc7786d89723ca66238ec",
+      "matchCount": 1,
+      "locationCount": 1
+    }
+  ]
+}

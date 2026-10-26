@@ -1,0 +1,11 @@
+Copper 0.4.0-rc.11 — public source edition
+
+Original Copper code and documentation: Copyright (C) 2026 Tian (GitHub: soyia) and Copper contributors; AGPL-3.0-only. Retain existing notices and see LICENSE and LICENSING.md.
+
+This source includes the standard Caddy v2.11.7 entry point at copper-web/docker/caddy/main.go:
+Copyright 2015 Matthew Holt and The Caddy Authors.
+Its original Apache-2.0 copyright header, copper-web/docker/caddy/LICENSE and copper-web/docker/caddy/NOTICE are preserved.
+
+Referenced Maven, npm, Go, base-image, operating-system and build-tool components retain their own licenses. Lock files and build recipes identify dependencies; their implementations, container images, Docker DEBs, dependency caches, compiled JARs and Web bundles are not distributed as release assets in this source edition. See THIRD_PARTY.md for the precise scope and retained known material limitations.
+
+This NOTICE does not modify any applicable license or grant commercial exceptions, trademarks, legal approval or customer sign-off.

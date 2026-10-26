@@ -1,0 +1,21 @@
+[Unit]
+Description=Copper self-hosted application
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+PartOf=docker.service
+ConditionPathExists=/etc/copper/copper.env
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=COPPER_ENV_FILE=/etc/copper/copper.env
+ExecStart=/usr/local/sbin/copperctl up
+ExecStop=/usr/local/sbin/copperctl down
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# Copper Deploy 工作准则
+
+- 本仓库是 Copper 正式自托管交付的唯一 Compose、配置模板、发布清单和运维入口；不得在前端或后端仓库复制第二套正式编排。
+- GitHub `origin` 是唯一 Git 交付远端，不得读取、同步或推送 Gitee。
+- GitHub `origin/main` 是唯一最新交付基线。当前为产品负责人个人开发模式，Deploy 默认不创建、不等待 Pull Request，也不触发、不等待 GitHub Actions。个人开发提交信息必须包含 `[skip ci]`，避免直接推送时自动启动工作流。完成必要静态合同测试和指定验收机真实验证后，必须先获取并确认 `origin/main` 没有未纳入的新提交，再将单一可快进提交直接推送到 `origin/main`，随后仅快进同步本地 `main`。如果不能快进、存在冲突或需要改写历史，禁止强推，必须停下说明。
+- 只有产品负责人之后明确指定“使用 GitHub Actions”“创建 Deploy PR”“恢复 CI/PR 门槛”或对某次正式发布/客户交付单独提出要求时，才去掉 `[skip ci]`、运行 Actions 或创建 Deploy Pull Request；不得自行恢复这些门槛。
+- M3 起新产品版本必须遵守 `docs/M3_VERSIONING_AND_COMPATIBILITY.md` 与 `config/release-policy.env`；`copper_deploy` 发布清单是客户产品版本和组件组合的唯一权威来源，前后端工程版本、Flyway、备份格式和导出格式不得冒充产品版本。
+- 已发布的 Git 标签、Release、组件清单、镜像摘要和 Flyway 迁移均不可覆盖修改。目标发布清单未明确列出并实测当前来源版本时，不得宣称可直接升级；包含 schema/data 变化时禁止用旧镜像或逆向 SQL 冒充安全回滚。
+- M1 正式基线仅支持 Ubuntu Server 24.04 LTS、amd64、Docker Engine 29.x、Compose Plugin 5.x 和 MySQL 8.4.x LTS。
+- 正式主机只发布 Web 的 80/443；Backend 8191 和 MySQL 3306 禁止映射宿主机端口。
+- 数据库、附件、日志、首次管理员凭据、Caddy 状态和备份目录必须显式持久化。普通停止、重启、容器重建和卸载必须保留数据。
+- 永久删除必须使用独立危险脚本，同时校验站点标识和人工确认；不得把删除卷或数据目录混入普通 `down`、`stop`、`uninstall`。
+- 数据库口令必须在安装时随机生成并通过只读文件挂载；不得进入 Git、镜像、Compose 环境值、命令行参数或日志。
+- 前后端镜像必须使用发布清单中的摘要或不可变标签，禁止 `latest`。测试用本地标签只能在明确的隔离测试模式下使用。
+- 健康检查必须区分 Web 存活、Backend 就绪和 MySQL 可用；Backend 迁移失败时不得被标记为可接收业务。
+- 容器验收只在 `ubuntu@local-database` 或标准 x86_64 验收机执行，不在开发电脑启动 Docker/Colima。
+- M5-03 当前本地主机正式安装目标仅为 Ubuntu Server 24.04 LTS x86_64。Windows 只可作为 Ubuntu 虚拟机宿主机；不得在 Windows 原生、WSL2 或 Docker Desktop 内安装 Copper。未来增加其他目标必须先完成独立真实设备验收。
+- `8191` 是用户正式后端端口；Agent 测试不得发布或占用宿主机 8191。
+- M2 备份必须把数据库、附件和允许清单配置固定在同一停写边界，生成公开格式、客户公钥加密和可独立校验的 `copper-backup/v1`；仅数据库 dump、仅附件复制或分页导出均不得称为整站备份。
+- **内部演练默认规则**：除非产品负责人明确指定“正式发布”“公开发布”或“客户交付”，本仓库生成的安装、发布、源码、备份恢复、升级和空白环境验证产物均为 `INTERNAL_REHEARSAL_ONLY`。安全、隐私、权利、法律或平台待办必须标为 `FORMAL_RELEASE_BLOCKED` 并持续收口，但不得阻断与其独立的内部演练、工程实现和证据收集。
+- 内部演练产物不得交付客户、公开发布、进入 GitHub Release 或宣传为正式交付；不得包含真实客户数据、生产密钥、私钥或未脱敏日志。产品负责人明确启动正式对外动作时，全部正式门槛自动恢复，未通过即禁止对外。

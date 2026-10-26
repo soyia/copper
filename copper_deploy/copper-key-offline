@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""Offline-only helper for customer-owned Copper age recovery identities."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import stat
+import subprocess
+import tarfile
+import tempfile
+
+
+RECIPIENT_RE = re.compile(r"^age1[0-9a-z]{20,}$")
+HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class OfflineKeyError(RuntimeError):
+    pass
+
+
+def fail(message: str) -> None:
+    raise OfflineKeyError(message)
+
+
+def now() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def key_id(recipient: str) -> str:
+    return hashlib.sha256(recipient.encode("ascii")).hexdigest()[:16]
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as reader:
+        for block in iter(lambda: reader.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def require_tool(name: str) -> None:
+    if shutil.which(name) is None:
+        fail(f"离线设备缺少 {name}；请从可信介质安装后重试")
+
+
+def secure_identity(path: pathlib.Path) -> None:
+    if not path.is_file() or path.is_symlink():
+        fail(f"age 私钥不存在、不是普通文件或是符号链接：{path}")
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        fail(f"age 私钥权限必须为 0600/0400 或更严格，当前为 {mode:04o}")
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        fail(f"age 私钥无法读取：{type(error).__name__}")
+    if b"AGE-SECRET-KEY-" not in content:
+        fail("文件不包含 age X25519 私钥")
+
+
+def recipient_for_identity(identity: pathlib.Path) -> str:
+    secure_identity(identity)
+    try:
+        result = subprocess.run(
+            ["age-keygen", "-y", str(identity)],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        fail("无法从 age 私钥推导接收公钥")
+    recipient = result.stdout.strip()
+    if not RECIPIENT_RE.fullmatch(recipient):
+        fail("推导出的 age 接收公钥格式不正确")
+    return recipient
+
+
+def exclusive_text(path: pathlib.Path, content: str, mode: int) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as writer:
+        writer.write(content)
+        writer.flush()
+        os.fsync(writer.fileno())
+
+
+def atomic_receipt(path: pathlib.Path, document: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as writer:
+            json.dump(document, writer, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            writer.write("\n")
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def clean_label(value: str, label: str) -> str:
+    text = value.strip()
+    if not text or len(text) > 100 or any(character in text for character in "\r\n\t"):
+        fail(f"{label} 必须为 1-100 个不含换行的字符")
+    return text
+
+
+def command_generate(args: argparse.Namespace) -> None:
+    require_tool("age-keygen")
+    output = pathlib.Path(args.output_dir).expanduser().resolve()
+    if output.exists():
+        fail(f"输出目录已经存在，拒绝覆盖任何密钥材料：{output}")
+    output.mkdir(parents=True, mode=0o700)
+    os.chmod(output, 0o700)
+    identity = output / "copper-age-identity.txt"
+    try:
+        subprocess.run(
+            ["age-keygen", "-o", str(identity)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        shutil.rmtree(output)
+        fail("age 私钥生成失败")
+    os.chmod(identity, 0o600)
+    recipient = recipient_for_identity(identity)
+    identifier = key_id(recipient)
+    generated_at = now()
+    exclusive_text(output / "recipient.txt", recipient + "\n", 0o644)
+    handover = {
+        "formatVersion": "copper-key-handover/v1",
+        "siteId": clean_label(args.site_id, "站点标识"),
+        "customerReference": clean_label(args.customer_reference, "客户代号"),
+        "keyId": identifier,
+        "recipient": recipient,
+        "generatedAt": generated_at,
+        "privateKeyGeneratedOffline": True,
+        "serverReceivedPrivateKey": False,
+        "requiredOfflineCopies": 2,
+        "customerConfirmation": "PENDING",
+        "witnessConfirmation": "PENDING",
+        "backupVerification": "PENDING",
+    }
+    exclusive_text(
+        output / "handover-record.json",
+        json.dumps(handover, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        0o600,
+    )
+    checklist = f"""# Copper 客户恢复私钥交接单
+
+- 站点：{args.site_id}
+- 客户代号：{args.customer_reference}
+- Key ID：{identifier}
+- 生成时间：{generated_at}
+- 接收公钥：{recipient}
+
+## 必须完成
+
+- [ ] 私钥在客户控制的离线设备生成，未发送给 Copper 或部署服务器。
+- [ ] 两份离线副本分别保存，且均能读取；记录位置只由客户保管，不写入服务器。
+- [ ] 客户确认人已核对 Key ID、公钥和两份副本。
+- [ ] 独立见证人已完成第二人复核。
+- [ ] 已使用实际 `.copperbak` 执行 `verify-backup` 并生成 PASSED 回执。
+- [ ] 客户理解：两份私钥全部丢失后，Copper 无法解密历史备份。
+
+客户确认人：________________  日期：________________
+
+复核见证人：________________  日期：________________
+
+部署人员：__________________  日期：________________
+
+签署或扫描后计算本交接单 SHA-256；服务器只登记该哈希，不保存私钥或副本位置。
+"""
+    exclusive_text(output / "handover-checklist.md", checklist, 0o600)
+    readme = """此目录包含客户恢复私钥，只能保存在客户控制的离线介质。
+
+允许交给 Copper 服务器：recipient.txt 的一行公钥、签署交接单的 SHA-256、verify-backup 生成的回执。
+禁止交给 Copper 服务器：copper-age-identity.txt、私钥截图、私钥压缩包或离线副本位置。
+"""
+    exclusive_text(output / "README.txt", readme, 0o600)
+    print(json.dumps({"outputDirectory": str(output), "keyId": identifier, "recipient": recipient}, ensure_ascii=False))
+
+
+def command_verify_challenge(args: argparse.Namespace) -> None:
+    require_tool("age")
+    require_tool("age-keygen")
+    identity = pathlib.Path(args.identity).expanduser().resolve()
+    recipient = recipient_for_identity(identity)
+    identifier = key_id(recipient)
+    challenge = pathlib.Path(args.challenge).expanduser().resolve()
+    if not challenge.is_file() or challenge.is_symlink():
+        fail("轮换挑战文件不存在或不安全")
+    try:
+        result = subprocess.run(
+            ["age", "--decrypt", "--identity", str(identity), str(challenge)],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        fail("轮换挑战无法用该私钥解密")
+    match = re.fullmatch(rf"copper-key-proof-v1:{identifier}:([A-Za-z0-9_-]{{40,80}})\n?", result.stdout)
+    if not match:
+        fail("轮换挑战内容与该私钥 Key ID 不一致")
+    output = pathlib.Path(args.proof_output).expanduser().resolve()
+    if output.exists():
+        fail(f"证明文件已存在，拒绝覆盖：{output}")
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    exclusive_text(output, match.group(1) + "\n", 0o600)
+    print(json.dumps({"keyId": identifier, "proofFile": str(output), "result": "PASSED"}))
+
+
+def safe_tar_members(archive: tarfile.TarFile, expected: set[str] | None, max_bytes: int) -> list[tarfile.TarInfo]:
+    members = archive.getmembers()
+    names = {member.name for member in members}
+    if expected is not None and names != expected:
+        fail("备份包外层成员不符合 copper-backup/v1")
+    total = 0
+    for member in members:
+        pure = pathlib.PurePosixPath(member.name)
+        if pure.is_absolute() or ".." in pure.parts or not (member.isfile() or member.isdir()):
+            fail("备份包包含不安全路径、链接或设备文件")
+        total += member.size
+        if total > max_bytes:
+            fail("备份解压内容超过离线验证安全上限")
+    return members
+
+
+def extract_safe(archive_path: pathlib.Path, destination: pathlib.Path, expected: set[str] | None, max_bytes: int) -> None:
+    with tarfile.open(archive_path, "r:") as archive:
+        members = safe_tar_members(archive, expected, max_bytes)
+        archive.extractall(destination, members=members)
+
+
+def verify_checksum_file(root: pathlib.Path, checksum_file: pathlib.Path) -> None:
+    seen: set[str] = set()
+    for line in checksum_file.read_text(encoding="ascii").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if not match:
+            fail("checksums.sha256 格式不正确")
+        name = match.group(2)
+        normalized = name[2:] if name.startswith("./") else name
+        pure = pathlib.PurePosixPath(normalized)
+        if pure.is_absolute() or ".." in pure.parts or normalized in seen:
+            fail("checksums.sha256 包含不安全或重复路径")
+        target = root / pure
+        if not target.is_file() or target.is_symlink() or sha256_file(target) != match.group(1):
+            fail(f"备份校验失败：{normalized}")
+        seen.add(normalized)
+
+
+def verify_outer_sidecar(archive: pathlib.Path) -> str:
+    sidecar = archive.with_name(archive.name + ".sha256")
+    if not sidecar.is_file() or sidecar.is_symlink():
+        fail("缺少与备份同名的 .sha256 校验文件")
+    lines = sidecar.read_text(encoding="ascii").splitlines()
+    if len(lines) != 1:
+        fail("外层 .sha256 校验文件格式不正确")
+    match = re.fullmatch(r"([0-9a-f]{64})  (.+)", lines[0])
+    digest = sha256_file(archive)
+    if not match or match.group(2) != archive.name or match.group(1) != digest:
+        fail("备份外层 SHA-256 或文件名不匹配")
+    return digest
+
+
+def decompress_with_limit(source: pathlib.Path, destination: pathlib.Path, max_bytes: int) -> None:
+    process = subprocess.Popen(
+        ["zstd", "-q", "-d", "-c", str(source)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    written = 0
+    assert process.stdout is not None
+    try:
+        with destination.open("xb") as writer:
+            while True:
+                block = process.stdout.read(1024 * 1024)
+                if not block:
+                    break
+                written += len(block)
+                if written > max_bytes:
+                    process.kill()
+                    fail("解密载荷展开后超过离线验证安全上限")
+                writer.write(block)
+        if process.wait() != 0:
+            fail("zstd 载荷解压失败")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def verified_components(manifest: dict[str, object]) -> dict[str, str]:
+    raw = manifest.get("components")
+    if not isinstance(raw, dict) or set(raw) != {
+        "webImage", "backendImage", "mysqlImage"
+    }:
+        fail("解密后的备份缺少完整的程序版本信息")
+    components = {name: str(value) for name, value in raw.items()}
+    for name, value in components.items():
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+            fail(f"解密后的备份程序版本信息不正确：{name}")
+    return components
+
+
+def command_verify_backup(args: argparse.Namespace) -> None:
+    require_tool("age")
+    require_tool("age-keygen")
+    require_tool("zstd")
+    identity = pathlib.Path(args.identity).expanduser().resolve()
+    recipient = recipient_for_identity(identity)
+    identifier = key_id(recipient)
+    archive = pathlib.Path(args.archive).expanduser().resolve()
+    if not archive.is_file() or archive.is_symlink() or not archive.name.endswith(".copperbak"):
+        fail("备份文件不存在、不安全或扩展名不是 .copperbak")
+    archive_digest = verify_outer_sidecar(archive)
+    max_bytes = max(2 * 1024**3, archive.stat().st_size * 200)
+    receipt = pathlib.Path(args.receipt).expanduser().resolve()
+    if receipt.exists():
+        fail(f"验证回执已存在，拒绝覆盖：{receipt}")
+    with tempfile.TemporaryDirectory(prefix="copper-offline-verify-") as temporary_name:
+        temporary = pathlib.Path(temporary_name)
+        outer = temporary / "outer"
+        payload = temporary / "payload"
+        outer.mkdir(mode=0o700)
+        payload.mkdir(mode=0o700)
+        extract_safe(
+            archive,
+            outer,
+            {"README.txt", "checksums.sha256", "envelope.json", "payload.tar.zst.age"},
+            max_bytes,
+        )
+        verify_checksum_file(outer, outer / "checksums.sha256")
+        envelope = json.loads((outer / "envelope.json").read_text(encoding="utf-8"))
+        if envelope.get("formatVersion") != "copper-backup/v1":
+            fail("备份 envelope 格式不受支持")
+        encryption = envelope.get("encryption")
+        if not isinstance(encryption, dict) or encryption.get("format") != "age":
+            fail("备份未声明 age 加密")
+        if encryption.get("recipientFingerprint") is not None and encryption.get("recipientFingerprint") != identifier:
+            fail("该备份不是使用当前私钥对应的接收公钥加密")
+        compressed = temporary / "payload.tar.zst"
+        try:
+            subprocess.run(
+                ["age", "--decrypt", "--identity", str(identity), "--output", str(compressed), str(outer / "payload.tar.zst.age")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            fail("备份无法用该客户私钥解密")
+        payload_tar = temporary / "payload.tar"
+        decompress_with_limit(compressed, payload_tar, max_bytes)
+        extract_safe(payload_tar, payload, None, max_bytes)
+        verify_checksum_file(payload, payload / "checksums.sha256")
+        manifest = json.loads((payload / "manifest.json").read_text(encoding="utf-8"))
+        backup_id = str(manifest.get("backupId", ""))
+        if manifest.get("formatVersion") != "copper-backup/v1" or not re.fullmatch(r"[0-9a-f]{32}", backup_id):
+            fail("解密后的 manifest 不符合 copper-backup/v1")
+        if backup_id != envelope.get("backupId"):
+            fail("envelope 与 manifest 的 backupId 不一致")
+        components = verified_components(manifest)
+        proof_path = payload / "verification/offline-proof.txt"
+        if not proof_path.is_file() or proof_path.is_symlink():
+            fail("备份缺少 M2-06 离线持钥证明；请使用当前版本重新创建实际备份")
+        proof = proof_path.read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", proof):
+            fail("备份内离线持钥证明格式不正确")
+        offline_verification = envelope.get("offlineVerification")
+        if (
+            not isinstance(offline_verification, dict)
+            or offline_verification.get("format") != "copper-offline-key-proof/v1"
+            or offline_verification.get("proofSha256") != hashlib.sha256(proof.encode("ascii")).hexdigest()
+        ):
+            fail("离线持钥证明与外层 envelope 摘要不匹配")
+        document = {
+            "formatVersion": "copper-key-backup-verification/v1",
+            "keyId": identifier,
+            "backupId": backup_id,
+            "backupSha256": archive_digest,
+            "components": components,
+            "proof": proof,
+            "proofSha256": offline_verification["proofSha256"],
+            "verifiedAt": now(),
+            "result": "PASSED",
+        }
+        atomic_receipt(receipt, document)
+    print(json.dumps({"keyId": identifier, "backupId": backup_id, "receipt": str(receipt), "result": "PASSED"}))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Copper customer offline recovery-key helper")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    generate = subparsers.add_parser("generate")
+    generate.add_argument("--output-dir", required=True)
+    generate.add_argument("--site-id", required=True)
+    generate.add_argument("--customer-reference", required=True)
+    generate.set_defaults(function=command_generate)
+
+    challenge = subparsers.add_parser("verify-challenge")
+    challenge.add_argument("--identity", required=True)
+    challenge.add_argument("--challenge", required=True)
+    challenge.add_argument("--proof-output", required=True)
+    challenge.set_defaults(function=command_verify_challenge)
+
+    backup = subparsers.add_parser("verify-backup")
+    backup.add_argument("--identity", required=True)
+    backup.add_argument("--archive", required=True)
+    backup.add_argument("--receipt", required=True)
+    backup.set_defaults(function=command_verify_backup)
+
+    args = parser.parse_args()
+    args.function(args)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OfflineKeyError, UnicodeError, json.JSONDecodeError, tarfile.TarError) as error:
+        print(f"错误：{error}", file=os.sys.stderr)
+        raise SystemExit(1)

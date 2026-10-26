@@ -1,0 +1,270 @@
+{
+  "format": "copper-actual-release-acceptance/v1",
+  "version": "0.4.0-rc.11",
+  "recordedAt": "2026-10-26T00:14:42.409773+00:00",
+  "status": "INTERNAL_ENGINEERING_ACCEPTANCE_PASS",
+  "scope": "INTERNAL_REHEARSAL_ONLY",
+  "ownerDeferredItemsBlockInternalAcceptance": false,
+  "frozenDeployCommit": "10b01725e653fffa5c2113f8cb49d4dbbcb9c048",
+  "runtimeBuildCommit": "f74b32c01360e68a8b2fc843bec95c4999be9893",
+  "inputRevision": 2,
+  "buildRunId": "50e31e28136b",
+  "receiptIsNewEvidenceOnly": true,
+  "frozenCandidateFilesChanged": false,
+  "images": {
+    "backend": {
+      "archive": "images/copper-backend-amd64.tar.gz",
+      "archiveSha256": "faeda39911785d1a17f42a6af98c9cd1bd16ee47e3684916024dfbea222b68cf",
+      "imageId": "sha256:c319358c261bae038f3d7723030dd65eb09a09ff3a2ad5fd745c18147015efcf",
+      "importedImageId": "sha256:c319358c261bae038f3d7723030dd65eb09a09ff3a2ad5fd745c18147015efcf",
+      "localTag": "127.0.0.1:59483/copper-backend:50e31e28136b",
+      "producerImageId": "sha256:c319358c261bae038f3d7723030dd65eb09a09ff3a2ad5fd745c18147015efcf",
+      "provenanceFile": "backend-local-build.json",
+      "provenanceSha256": "ab414deccaa39ebfc4c1168a80f614f89559e211aabcb683b7b1f240670ffe9e",
+      "reference": "127.0.0.1:59483/copper-backend@sha256:c319358c261bae038f3d7723030dd65eb09a09ff3a2ad5fd745c18147015efcf",
+      "sourceCommit": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9"
+    },
+    "mysql": {
+      "archive": "images/copper-mysql-amd64.tar.gz",
+      "archiveSha256": "e19b5ac4ad68b4bbd3706f84d5aab69e122dc65bffa87d83177481df1d550249",
+      "imageId": "sha256:565064da48aca2a8a95939de4e88e2d9c38dbf20eff669fb846031535f054592",
+      "importedImageId": "sha256:565064da48aca2a8a95939de4e88e2d9c38dbf20eff669fb846031535f054592",
+      "localTag": "127.0.0.1:59483/copper-mysql:50e31e28136b",
+      "producerImageId": "sha256:565064da48aca2a8a95939de4e88e2d9c38dbf20eff669fb846031535f054592",
+      "provenanceFile": "mysql-local-build.json",
+      "provenanceSha256": "cbb9272b763102848d32a4bb9cba15cf0c1b19d38842bbc6f65ff99f820baa5d",
+      "reference": "127.0.0.1:59483/copper-mysql@sha256:565064da48aca2a8a95939de4e88e2d9c38dbf20eff669fb846031535f054592",
+      "sourceCommit": "f74b32c01360e68a8b2fc843bec95c4999be9893"
+    },
+    "web": {
+      "archive": "images/copper-web-amd64.tar.gz",
+      "archiveSha256": "0fd2484b58dd3b5051b2d9ce88edc7c1b90669f72e75de5f9b0971650a6e9ff3",
+      "imageId": "sha256:b4d8bd20e37583720d441b7036580c9f4021d414f45a4840b61e524800c3e92e",
+      "importedImageId": "sha256:b4d8bd20e37583720d441b7036580c9f4021d414f45a4840b61e524800c3e92e",
+      "localTag": "127.0.0.1:59483/copper-web:50e31e28136b",
+      "producerImageId": "sha256:b4d8bd20e37583720d441b7036580c9f4021d414f45a4840b61e524800c3e92e",
+      "provenanceFile": "web-local-build.json",
+      "provenanceSha256": "4f3267df777e4c6b18a638e67e30eb423f5aedab5e0ea07c98f2c05110f508da",
+      "reference": "127.0.0.1:59483/copper-web@sha256:b4d8bd20e37583720d441b7036580c9f4021d414f45a4840b61e524800c3e92e",
+      "sourceCommit": "d497d7958e6148cd31a47248fc36c85f2e0c24ed"
+    }
+  },
+  "finalMedium": {
+    "archiveSha256": "e8f2407121fef052523240b5418dcafa665650d2517637fb346cce0b1860ecd3",
+    "rootSumsSha256": "710a1af86baed98502dd8971274298c2297ce408286abc8bca98635b448d9b17",
+    "originalFilesUnmodifiedAfterActualInstall": true
+  },
+  "host": {
+    "address": "18.142.134.26",
+    "siteId": "copper-acceptance-rc11",
+    "os": "Ubuntu Server 24.04 LTS",
+    "architecture": "amd64",
+    "healthyServices": [
+      "web",
+      "backend",
+      "mysql"
+    ],
+    "protectedHostPortsUnbound": [
+      8191,
+      3306
+    ],
+    "publicHttps": {
+      "statusLine": "HTTP/1.1 200 OK",
+      "trustedChainAndIpSanVerified": true,
+      "certificateSha256": "f29dd516221c632c4138b4d2389c0205c03256116f8392400094414b9ac90de7",
+      "notBefore": "Oct 25 22:37:59 2026 GMT",
+      "notAfter": "Nov  1 14:37:58 2026 GMT",
+      "subjectAltName": [
+        [
+          "IP Address",
+          "18.142.134.26"
+        ]
+      ]
+    },
+    "macIndependentProbe": {
+      "healthHttpStatus": 200,
+      "rootHttpStatus": 200,
+      "tlsVerifyResult": 0
+    },
+    "syntheticDataOnly": true
+  },
+  "actualInstall": "COMPLETE_FRESH_DEFAULT_INSTALLER",
+  "directUpgradeSources": [],
+  "originalIssues": [
+    {
+      "issue": "stopped-partner-business-posting",
+      "fixedBy": "a5fb8a52e9ce07fa35a3db527142b4808382488e",
+      "includedInCurrentSource": true
+    },
+    {
+      "issue": "quantity-precision-web-backend-six-decimals",
+      "fixedBy": "006860eda316de185b215108a424c9a8290945a7",
+      "includedInCurrentSource": true
+    },
+    {
+      "issue": "four-missing-attachment-reference-classes",
+      "fixedBy": "40279eb26d9366fbbfae19c233cb0a689086be62",
+      "includedInCurrentSource": true
+    }
+  ],
+  "additionalRecoveryFixes": [
+    "producer-dot-slash-checksum-compatibility-with-strict-path-boundary",
+    "exact-closed-numeric-binlog-continuity-and-file-set"
+  ],
+  "validation": {
+    "backendUnitTests": 227,
+    "backendIsolatedMysqlTests": 98,
+    "webUnitTests": 176,
+    "deployPythonTestsOnActualUbuntu": 386,
+    "deployStaticAndM3Contracts": "PASS",
+    "supplementalContracts": 10,
+    "phaseComposition": {
+      "originalPassedPhases": [
+        "bootstrap",
+        "seed",
+        "full",
+        "full-mac-receipt",
+        "advance",
+        "incremental",
+        "stage1",
+        "switch1",
+        "restored",
+        "continue",
+        "rebuild",
+        "new-full",
+        "new-full-mac-receipt",
+        "stage2",
+        "discard2"
+      ],
+      "supplementalFinal": true
+    },
+    "originalFrozenFinal": "NOT_EXECUTED",
+    "supplementalFinal": "PASS_WITH_EXPECTED_RETENTION_ROTATION",
+    "originalLedgerSha256": "e6526a27e9009028b4c543bcd1a194221865f7a3e04c6e42e6e22c47e74a0736",
+    "financialExpectationsChanged": false,
+    "coreForeignKeys": 78,
+    "currentBusinessFacts": {
+      "schema": "68",
+      "foreign_keys": "92",
+      "quantity": "7.999999",
+      "amount_cost": "400.98",
+      "receivable": "55.14",
+      "payable": "280.42"
+    },
+    "attachmentFilesVerified": 2,
+    "stage1": "FULL_PLUS_INCREMENTAL_IMPORTED_REPLAYED_VALIDATED_AND_SWITCHED",
+    "stage2": "POST_CONTINUATION_NEW_FULL_INDEPENDENTLY_VALIDATED_THEN_DISCARDED",
+    "macIndependentFullDecryptions": 2,
+    "allThreeContainersActuallyRecreated": true,
+    "firstSwitchedRollbackRetained": true,
+    "receiptStaticAndM3Contracts": "PASS_AFTER_ADDING_RECEIPT"
+  },
+  "retention": {
+    "counts": {
+      "daily": 7,
+      "weekly": 4,
+      "monthly": 6
+    },
+    "selection": "Latest full base per UTC day/week/month and the latest complete chain",
+    "oldFull": {
+      "backupId": "26b14be946e8c6557c76737c816c114a",
+      "originalSha256": "dd1d6e5776118c6bb1bc4dcb5c653a0fbf0c423ddd6829808e959e8066008688",
+      "availability": "MAC_ORIGINAL_COPY_VERIFIED_BY_OPERATOR",
+      "macCopy": {
+        "location": "MAC_SYNTHETIC_VERIFICATION_COPY",
+        "archiveBasename": "copper-acceptance-rc11_20261025T233934Z_26b14be946e8c6557c76737c816c114a_manual.copperbak",
+        "backupId": "26b14be946e8c6557c76737c816c114a",
+        "sha256": "dd1d6e5776118c6bb1bc4dcb5c653a0fbf0c423ddd6829808e959e8066008688",
+        "sidecarVerifiedAgain": true
+      }
+    },
+    "oldIncremental": {
+      "backupId": "1276e58764bb076c0a04a29c11541c1b",
+      "originalSha256": "188076564a71ec1b0290cb26d520f91e08dc558d8b1e4c5c5a6024cfba5a85cb",
+      "availability": "PRUNED_BY_POLICY_ORIGINAL_BYTES_NOT_RETAINED",
+      "originalBytesReconstructed": false
+    },
+    "latestFull": {
+      "backupId": "b7d4e16dc13e810f160c8b161c4b09fb",
+      "sha256": "ae2391bcea8a9c82a34150399915e713860bca76c09c4b41802aa555a9cb1171",
+      "archiveAndSidecarActuallyVerified": true,
+      "actualMacReceiptSha256": "bdfb5e48afe8289e3acba0e1b2d3fe3dd8c7bf3a0c571ee3dd94e6a44a47d4b4",
+      "independentStage2Passed": true
+    },
+    "deletionEvidence": "OPERATOR_OBSERVATION_NOT_PRODUCT_STRUCTURED_RECEIPT",
+    "originalFrozenDriverChanged": false
+  },
+  "security": {
+    "applicationM4": {
+      "bundleSha256": "1f8d276ae06031afc8cd6d1e92a53899d044c34f51c9dea222f3036995ea9086",
+      "rawCritical": 2,
+      "rawHigh": 5,
+      "exactTechnicalFalsePositiveDispositions": 7,
+      "unexceptedCritical": 0,
+      "unexceptedHigh": 0
+    },
+    "exceptionKind": "EXACT_TECHNICAL_FALSE_POSITIVE_NOT_RISK_ACCEPTANCE",
+    "severityDowngraded": false,
+    "originalExpiry": "2026-10-31T12:48:26.362098+00:00",
+    "dockerVendorSupplement": {
+      "rawCritical": 6,
+      "rawHigh": 29,
+      "status": "KNOWN_UPSTREAM_OWNER_DEFERRED_NONBLOCKING_INTERNAL",
+      "notCountedAsApplicationM4Fixed": true
+    }
+  },
+  "rights": {
+    "materialsSha256": "8c2c86a80615e76de47e324360a0fbc87c036ef6a22897c171488fffac7bbcd1",
+    "ordinaryFiles": 800,
+    "osIdentityBindings": 291,
+    "uniqueDeferredComponents": 4,
+    "deferredScopes": 6,
+    "missingPublisherMitLicenseBodies": 2,
+    "formalM6": "NOT_CLOSED",
+    "engineeringApproval": null,
+    "legalApproval": null,
+    "internalEngineeringMaterialsReconciliation": "PASS"
+  },
+  "ownerDeferredNonblocking": [
+    "actual-browser-and-promised-mobile-device-acceptance",
+    "lawyer-and-accountant-review",
+    "commercial-contract-and-support-lifecycle-signatures",
+    "actual-independent-nondeveloper-install",
+    "real-customer-held-key-recovery-and-witnessed-signed-handover",
+    "third-party-rights-and-upstream-vendor-material-remediation"
+  ],
+  "operationalBoundaries": {
+    "dockerPreinstalledOnline": true,
+    "dockerOfflineInstallAcceptance": false,
+    "entireHostNetworklessInstallAcceptance": false,
+    "customerKeyOrWitnessClaimed": false,
+    "signedCommercialSlaClaimed": false,
+    "crossVersionUpgradeClaimed": false,
+    "publicReleaseOrTagCreated": false,
+    "customerProductionDeploymentPerformed": false,
+    "oldRc10SiteColdPreserved": true,
+    "serverTransientSyntheticAgeKeyRemoved": true,
+    "backupKeyAuditFindingCount": 0,
+    "dedicatedGithubAgentTerminatedWithinAuthorizedHour": true,
+    "dailySshAgentChanged": false
+  },
+  "serverArtifacts": {
+    "mediumSshOnly": "/home/ubuntu/copper-acceptance-20261025/export/rc11-guided-final-r2.tar.gz",
+    "evidenceSshOnly": "/home/ubuntu/copper-acceptance-20261025/export/rc11-final-acceptance-evidence.tar.gz",
+    "latestBackup": "/var/backups/copper/copper-acceptance-rc11_20261025T234817Z_b7d4e16dc13e810f160c8b161c4b09fb_manual.copperbak",
+    "rollback": "/var/lib/copper-restores/release-recovery-rc11",
+    "oldRc10ColdRoot": "/home/ubuntu/copper-acceptance-20261025/preserved-rc10-before-rc11",
+    "mediumBytes": 980961418
+  },
+  "evidenceFiles": {
+    "actual-acceptance-20261026/DOCKER_VENDOR_HYDRATION.json": "e3a196b9371b4d001cb5b7260ffbb394b16ae9d0379535fe55a9492ed458b23a",
+    "actual-acceptance-20261026/DOCKER_VENDOR_ORIGINAL_REVIEW.json": "ea0b02384533ae0cd7af0313dba5551941c10e61954032568149baa9675163b0",
+    "actual-acceptance-20261026/FINAL_OPERATIONAL_AUDIT.json": "0abd591f2854e936bd91870b7de4b18fc7e5880c6111bf4354dcbaf9db250a6c",
+    "actual-acceptance-20261026/GITHUB_AGENT_CLEANUP.json": "9a1679648600b85b2a3bc419181088b0a773315d9be9a51f7cf0bf467c823264",
+    "actual-acceptance-20261026/RIGHTS_MATERIALS_VERIFICATION.json": "69d554db155371499a1b77aae030a1b1a5c9140ea887d9999688e9dc967d77c2",
+    "actual-acceptance-20261026/frozen-driver.tar.gz": "2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d",
+    "actual-acceptance-20261026/runtime-evidence.tar.gz": "15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb",
+    "actual-acceptance-20261026/supplemental-retention-final.py": "c2d30442faf6c69a2518da7bf49de894678e0d2b03048ef55a40969f2c924b00",
+    "actual-acceptance-20261026/test_supplemental_retention_contract.py": "4234d1ba49e4641ab7df72e5147c784def7e4ae542294c01cf9493da03211d20"
+  }
+}

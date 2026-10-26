@@ -1,0 +1,131 @@
+{
+  "format": "copper-public-release-review/v1",
+  "recordedAt": "2026-10-26T00:57:11.113411+00:00",
+  "version": "0.4.0-rc.11",
+  "status": "PUBLICATION_NOT_PERFORMED_ADDITIONAL_PUBLICATION_WORK_FOUND",
+  "internalEngineeringAcceptanceChanged": false,
+  "newConfirmedBusinessOrRecoveryDefect": false,
+  "allThreeGithubRepositoriesPrivate": true,
+  "allThreeGithubLicenseFieldsNull": true,
+  "publicRepositoryVisibilityChanged": false,
+  "releaseCreated": false,
+  "tagCreated": false,
+  "externalProfessionalReviewsReimposedAsApproval": false,
+  "currentSources": [
+    {
+      "repo": "soyia/copper_backend",
+      "head": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9",
+      "mainSourceLicenseFileExists": false,
+      "ordinaryBranchRefs": 27,
+      "prHeadRefs": 75,
+      "tagRefs": 0
+    },
+    {
+      "repo": "soyia/copper_web",
+      "head": "d497d7958e6148cd31a47248fc36c85f2e0c24ed",
+      "mainSourceLicenseFileExists": false,
+      "ordinaryBranchRefs": 36,
+      "prHeadRefs": 126,
+      "tagRefs": 0
+    },
+    {
+      "repo": "soyia/copper_deploy",
+      "head": "e791e0a618fced8d7591356758aa145aa00b626c",
+      "mainSourceLicenseFileExists": false,
+      "ordinaryBranchRefs": 15,
+      "prHeadRefs": 116,
+      "tagRefs": 0
+    }
+  ],
+  "liveStrictAllRefsAudit": {
+    "decision": "BLOCK",
+    "summary": {
+      "total": 64,
+      "blocking": 64,
+      "newBlocking": 64,
+      "knownBlockers": 0,
+      "approved": 0,
+      "byCategory": {
+        "personal_information": 47,
+        "secret": 13,
+        "customer_data": 4
+      },
+      "byRepository": {
+        "copper_backend": 32,
+        "copper_deploy": 14,
+        "copper_web": 18
+      },
+      "byScope": {
+        "history": 62,
+        "current": 2
+      }
+    },
+    "ordinaryBranchCounts": [
+      27,
+      36,
+      15
+    ],
+    "prHeadCounts": [
+      75,
+      126,
+      116
+    ],
+    "totalPrHeads": 317,
+    "currentFindings": {
+      "count": 2,
+      "technicalReview": "EXACT_SYNTHETIC_ARCHIVE_PATH_FALSE_POSITIVES_ONLY",
+      "originalRawReportUnchanged": true
+    },
+    "historyCandidatesStillRequireDisposition": 62,
+    "confirmedLiveCredentialsOrPiiCountClaimed": false,
+    "githubActionsHistoryAndLogContentsAudited": false
+  },
+  "remainingDeveloperWork": [
+    "final-license-and-applicable-copyright-range",
+    "public-readme-build-notice-contribution-and-security-entrypoints",
+    "clean-public-snapshot-repository-without-old-private-platform-history",
+    "public-source-release-index-and-anonymous-reproduction",
+    "public-binary-medium-format-and-source-obligations-if-distributing-installers"
+  ],
+  "ownerLicenseDecision": "PENDING_ASYNC_RESPONSE_AGPL3_TARGET_OR_APACHE2",
+  "recommendedDistribution": "Independent empty public source release repository containing complete audited three-component snapshot; preserve original private repos and their unapproved platform history. Do not fork/mirror old histories.",
+  "unpublishedSourceCandidate": {
+    "status": "UNPUBLISHED_PENDING_LICENSE_DECISION",
+    "trackedSourceFiles": 1062,
+    "ordinaryArchiveMembers": 1065,
+    "sha256": "1ea90cf17e8db7de243c81d85eea68b4ef676f46692b122a495540086cde0dcb",
+    "bytes": 3408815,
+    "path": "/private/tmp/copper-public-release-review-20261026/UNPUBLISHED_SOURCE_PREVIEW_RC11.tar.gz",
+    "allOriginalTrackedBytesModesPreserved": true,
+    "gitHistoryOrIgnoredLocalFilesIncluded": false,
+    "licenseGrantMade": false,
+    "anonymousBuildActuallyRun": false
+  },
+  "existingBinaryMedium": {
+    "sha256": "e8f2407121fef052523240b5418dcafa665650d2517637fb346cce0b1860ecd3",
+    "format": "INTERNAL_REHEARSAL_ONLY",
+    "publicBinaryReleaseReady": false,
+    "operatorValuesPrefilledSite": false,
+    "operatorValuesPrefilledDomain": false,
+    "operatorValuesPrefilledBackupRecipient": false,
+    "earlierPrefilledValuesStatementCorrected": true
+  },
+  "alreadyDisclosedDeferralsUnchanged": [
+    "browser-and-mobile",
+    "lawyer-and-accountant",
+    "commercial-contract-support-lifecycle-signatures",
+    "independent-nondeveloper-customer-install",
+    "real-customer-key-witness-and-signed-handover",
+    "m6-third-party-materials-and-docker-vendor-upstream-findings"
+  ],
+  "evidence": {
+    "public-release-review-20261026/source-candidate-audit.json": "9de95ddc8878e20bd41de1eb818282664912657aba603c9fe4a8765bf4f27ddb",
+    "public-release-review-20261026/platform-all-refs-audit.json": "56a8bb5f7b7c48d28b485c46b47a9511d85c84d4e47d0c2e6d09f2fff18c8610",
+    "public-release-review-20261026/exact-technical-dispositions.json": "afc972d4c282d2de60578ed264a83ac1600fa9ad4b44031d5a2530048333e5ca",
+    "public-release-review-20261026/current-ref-inventory.json": "727f2bb244573e6bda604b868dc40916039d4a133874e50c9a9851ad95380367"
+  },
+  "officialReferences": [
+    "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository",
+    "https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility"
+  ]
+}

@@ -1,0 +1,212 @@
+name: Publish Copper MySQL runtime image
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Immutable Copper release version
+        required: true
+        default: source
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: copper-mysql-image-${{ github.event.pull_request.number || github.ref }}-${{ inputs.release_version || 'source' }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Build and initialize amd64 MySQL runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Build the runtime image without publishing
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false \
+            --sbom=false \
+            --load \
+            --tag copper-mysql-runtime:ci \
+            --file images/mysql/Dockerfile \
+            .
+
+      - name: Verify privilege drop and first database initialization
+        run: |
+          set -Eeuo pipefail
+          container="copper-mysql-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          password="$(openssl rand -hex 24)"
+          cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker run -d --name "$container" \
+            -e MYSQL_ROOT_PASSWORD="$password" \
+            -e MYSQL_DATABASE=copper_smoke \
+            copper-mysql-runtime:ci >/dev/null
+          initialized=0
+          for _ in $(seq 1 90); do
+            if docker logs "$container" 2>&1 | grep -q 'MySQL init process done. Ready for start up.'; then
+              initialized=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$initialized" != 1 ]]; then
+            docker logs "$container" >&2
+            exit 1
+          fi
+          ready=0
+          for _ in $(seq 1 60); do
+            if docker exec -e MYSQL_PWD="$password" "$container" mysql --protocol=socket -uroot \
+              -Nse 'SELECT 1' >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != 1 ]]; then
+            docker logs "$container" >&2
+            exit 1
+          fi
+          test "$(docker exec "$container" gosu mysql id -un)" = mysql
+          docker exec "$container" mysqlbinlog --version | grep -F 'Ver 8.4.10'
+          docker exec -e MYSQL_PWD="$password" "$container" mysql --protocol=socket -uroot \
+            -e 'CREATE TABLE copper_smoke.acceptance (id INT PRIMARY KEY); INSERT INTO copper_smoke.acceptance VALUES (1); SELECT id FROM copper_smoke.acceptance;'
+
+  publish:
+    name: Publish immutable amd64 runtime image and BOM
+    if: github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      actions: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Resolve immutable build identity
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$REQUESTED_VERSION" != source ]]; then
+            release_version="$REQUESTED_VERSION"
+          else
+            release_version="source-$GITHUB_SHA"
+          fi
+          [[ "$release_version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] || {
+            echo "Invalid release version: $release_version" >&2
+            exit 2
+          }
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/soyia/copper_mysql" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish exact amd64 image
+        id: image
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false \
+            --sbom=false \
+            --tag "$IMAGE:$RELEASE_VERSION" \
+            --tag "$IMAGE:sha-$GITHUB_SHA" \
+            --metadata-file /tmp/copper-mysql-metadata.json \
+            --push \
+            --file images/mysql/Dockerfile \
+            .
+          digest="$(jq -r '."containerimage.digest" // empty' /tmp/copper-mysql-metadata.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Build did not return an immutable image digest" >&2
+            exit 1
+          }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Export exact amd64 image and BOM
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          CREATED: ${{ steps.release.outputs.created }}
+        run: |
+          set -Eeuo pipefail
+          output=/tmp/copper-mysql-runtime
+          install -d -m 0700 "$output"
+          exact="$IMAGE@$DIGEST"
+          delivery_tag="$IMAGE:m6-delivery-$GITHUB_SHA-amd64"
+          docker pull --platform linux/amd64 "$exact"
+          docker tag "$exact" "$delivery_tag"
+          local_id="$(docker image inspect --format '{{.Id}}' "$delivery_tag")"
+          architecture="$(docker image inspect --format '{{.Architecture}}' "$delivery_tag")"
+          [[ "$local_id" =~ ^sha256:[0-9a-f]{64}$ && "$architecture" == amd64 ]] || {
+            echo "Exported image identity does not match linux/amd64" >&2
+            exit 1
+          }
+          archive=copper-mysql-amd64.tar.gz
+          docker save "$delivery_tag" | gzip -n > "$output/$archive"
+          archive_sha="$(sha256sum "$output/$archive" | awk '{print $1}')"
+          archive_bytes="$(stat --format '%s' "$output/$archive")"
+          jq -n \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg workflowRun "$GITHUB_RUN_ID" \
+            --arg workflowAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg createdAt "$CREATED" \
+            --arg imageRepository "$IMAGE" \
+            --arg image "$exact" \
+            --arg digest "$DIGEST" \
+            --arg localId "$local_id" \
+            --arg archive "$archive" \
+            --arg archiveSha "$archive_sha" \
+            --argjson archiveBytes "$archive_bytes" \
+            '{format:"copper-image-bom/v1",role:"mysql",sourceRepository:"soyia/copper_deploy",sourceCommit:$sourceCommit,workflowRun:$workflowRun,image:$image,manifestDigest:$digest,platforms:[{format:"copper-image-platform/v1",role:"mysql",sourceRepository:"soyia/copper_deploy",sourceCommit:$sourceCommit,workflowRun:$workflowRun,workflowAttempt:$workflowAttempt,createdAt:$createdAt,imageRepository:$imageRepository,platform:"linux/amd64",platformDigest:$digest,localId:$localId,archive:{name:$archive,bytes:$archiveBytes,sha256:$archiveSha}}]}' \
+            > "$output/image-bom.json"
+          (cd "$output" && sha256sum "$archive" image-bom.json > SHA256SUMS)
+
+      - name: Reserve capacity for the new runtime archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPPER_ARTIFACT_KEEP_SUCCESSFUL: '1'
+        run: scripts/cleanup-mysql-actions-artifacts.sh
+
+      - name: Upload runtime image and BOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: copper-mysql-runtime-amd64-${{ github.sha }}
+          path: /tmp/copper-mysql-runtime/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Keep only this and the preceding successful runtime archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPPER_ARTIFACT_KEEP_SUCCESSFUL: '1'
+        run: scripts/cleanup-mysql-actions-artifacts.sh
+
+      - name: Log out from GHCR
+        if: always()
+        run: docker logout ghcr.io || true

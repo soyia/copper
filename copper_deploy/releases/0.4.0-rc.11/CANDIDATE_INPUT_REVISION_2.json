@@ -1,0 +1,39 @@
+{
+  "format": "copper-unpublished-candidate-input-revision/v1",
+  "releaseVersion": "0.4.0-rc.11",
+  "inputRevision": 2,
+  "purpose": "RELEASE_NOTES_REQUIRED_SECTIONS_ONLY",
+  "previousFrozenDeployCommit": "3f176ef52c2247790f68a89e350603c453e06534",
+  "previousInputSet": "rc11-inputs-1",
+  "newInputSet": "rc11-inputs-2",
+  "previousInputSetAndFailurePreserved": true,
+  "previousM4Substep": "PASS_OVERALL_OFFLINE_PACKAGE_FAILED",
+  "runtimeBuildCommit": "f74b32c01360e68a8b2fc843bec95c4999be9893",
+  "buildRunId": "50e31e28136b",
+  "buildInputsDocumentSha256Unchanged": "46d3364190079a89b9c673834abb5f125134fe09ea89f8616f4a6e83c62118f9",
+  "previousNotesSha256": "7f416d3e715314198db8781dbe62fe7e7194ba655dd0ed249d67be69204c61ad",
+  "revisedNotesSha256": "df1c2bb4c2f293f8880f6639c99db448c50a5f7c8d82d9f6444e644895df6e2d",
+  "imageRebuildClaimedForMetadataRevision": false,
+  "imagesUnchanged": {
+    "backend": {
+      "imageId": "sha256:c319358c261bae038f3d7723030dd65eb09a09ff3a2ad5fd745c18147015efcf",
+      "archiveSha256": "faeda39911785d1a17f42a6af98c9cd1bd16ee47e3684916024dfbea222b68cf",
+      "provenanceSha256": "ab414deccaa39ebfc4c1168a80f614f89559e211aabcb683b7b1f240670ffe9e",
+      "sourceCommit": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9"
+    },
+    "mysql": {
+      "imageId": "sha256:565064da48aca2a8a95939de4e88e2d9c38dbf20eff669fb846031535f054592",
+      "archiveSha256": "e19b5ac4ad68b4bbd3706f84d5aab69e122dc65bffa87d83177481df1d550249",
+      "provenanceSha256": "cbb9272b763102848d32a4bb9cba15cf0c1b19d38842bbc6f65ff99f820baa5d",
+      "sourceCommit": "f74b32c01360e68a8b2fc843bec95c4999be9893"
+    },
+    "web": {
+      "imageId": "sha256:b4d8bd20e37583720d441b7036580c9f4021d414f45a4840b61e524800c3e92e",
+      "archiveSha256": "0fd2484b58dd3b5051b2d9ce88edc7c1b90669f72e75de5f9b0971650a6e9ff3",
+      "provenanceSha256": "4f3267df777e4c6b18a638e67e30eb423f5aedab5e0ea07c98f2c05110f508da",
+      "sourceCommit": "d497d7958e6148cd31a47248fc36c85f2e0c24ed"
+    }
+  },
+  "publicReleaseCreated": false,
+  "publishedFilesOverwritten": false
+}

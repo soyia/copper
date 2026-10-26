@@ -1,0 +1,18 @@
+FROM eclipse-temurin:17-jre@sha256:1824944ef1bd572d1ff0952afeb2fec7931d77c972c4fbc4dfcdf89f758fb490
+
+RUN groupadd --gid 10001 copper \
+    && useradd --uid 10001 --gid copper --no-create-home --home-dir /app --shell /usr/sbin/nologin copper \
+    && mkdir -p /app/data/files /app/data/logs /app/data/secrets /app/data/tmp /app/data/runtime \
+    && chown -R copper:copper /app
+
+WORKDIR /app
+COPY --chown=copper:copper copper.jar /app/copper.jar
+
+ENV SPRING_PROFILES_ACTIVE=prod
+EXPOSE 8191
+USER copper:copper
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=18 \
+    CMD curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${COPPER_PORT}/api/actuator/health/readiness" | grep -q '"status":"UP"' || exit 1
+
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-Djava.io.tmpdir=/app/data/tmp", "-Djava.security.egd=file:/dev/urandom", "-jar", "/app/copper.jar"]

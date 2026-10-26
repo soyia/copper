@@ -1,0 +1,20 @@
+.git
+.github
+.idea
+.vscode
+.DS_Store
+node_modules
+dist
+coverage
+# Keep internal documents out; the help manual is an imported application source.
+docs
+!docs/
+docs/**
+!docs/help/
+docs/help/**
+!docs/help/BASE_DATA_USER_GUIDE.md
+tests
+*.log
+.env
+.env.*
+!.env.example

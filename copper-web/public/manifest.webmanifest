@@ -1,0 +1,19 @@
+{
+  "name": "铜易通贸易 · 手机办事",
+  "short_name": "Copper",
+  "description": "面向小微铜材经销商的轻量手机工作台",
+  "start_url": "/mobile",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f6f8",
+  "theme_color": "#0b2a3f",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/copper-mobile.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

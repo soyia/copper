@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Copper weekly-full daily-incremental encrypted backup chain
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=30m
+FixedRandomDelay=true
+Persistent=true
+Unit=copper-backup.service
+
+[Install]
+WantedBy=timers.target

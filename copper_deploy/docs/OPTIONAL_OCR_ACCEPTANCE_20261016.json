@@ -1,0 +1,34 @@
+{
+  "format": "copper-optional-ocr-live/v1",
+  "engine": "PADDLEOCR_LOCAL",
+  "model": "PP-OCRv6-medium",
+  "inputSha256": "2b091ce66be7f71ba6a7b04777ec396c54ffc74a949eeaaa298e5901fc6238bf",
+  "lineCount": 68,
+  "brandAnchor": true,
+  "deliveryDocumentAnchor": true,
+  "responseSha256": "fa4991bce0bf86e51019654f9bea9c82f238774ec94e8ff737275e6fc4ce5aff",
+  "privateImageNotArchived": true,
+  "rawRecognizedTextNotArchived": true,
+  "inventoryOrFinancialPosting": false,
+  "loopbackPort": 18087,
+  "result": "PASS",
+  "originalModelCacheUnchanged": true,
+  "engineProcessStopped": true,
+  "temporaryModelCacheRemoved": true,
+  "paddlepaddleVersion": "3.3.1",
+  "paddleocrVersion": "3.7.0",
+  "paddlexVersion": "3.7.2",
+  "scope": "Native macOS CPU client-to-real-engine recognition only; Docker packaging and exact package-label field accuracy not asserted.",
+  "originalModelCacheFilesVerified": 26,
+  "deployContractValidation": {
+    "pythonUnittest": {
+      "tests": 303,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "dockerRuntimeUsed": false,
+    "composePrivateNetworkRuntimeAcceptance": "PENDING_STANDARD_UBUNTU_HOST",
+    "staticContract": "PASS"
+  }
+}

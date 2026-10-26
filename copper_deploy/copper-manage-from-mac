@@ -1,0 +1,1102 @@
+#!/usr/bin/env python3
+"""Customer-facing Mac entry for common Copper post-install operations."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+from dataclasses import dataclass
+
+
+PROFILE_FORMAT = "copper-mac-site-profile/v1"
+REMOVAL_RECEIPT_FORMAT = "copper-guided-removal-receipt/v1"
+PENDING_REMOVAL_FORMAT = "copper-guided-removal-pending/v1"
+PENDING_RESTORE_FORMAT = "copper-guided-restore-pending/v1"
+SITE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,31}$")
+RESTORE_ID_RE = re.compile(r"^operator-[0-9]{8}-[0-9]{6}$")
+BACKUP_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,31}_[0-9TZ]+_[0-9a-f]{32}_(?:manual|scheduled|pre-upgrade)\.copperbak$")
+DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+SSH_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+SSH_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
+class ManagerError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class ProtectionResult:
+    archive: pathlib.Path
+    verification_receipt: pathlib.Path
+
+
+def fail(message: str) -> None:
+    raise ManagerError(message)
+
+
+def choose(question: str, options: list[str]) -> int:
+    print(f"\n{question}")
+    for index, option in enumerate(options, 1):
+        print(f"  {index}. {option}")
+    while True:
+        answer = input("请选择序号：").strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return int(answer)
+        print("请输入上面显示的序号。")
+
+
+def prompt(label: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{label}{suffix}：").strip()
+    return value or default
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as reader:
+        for block in iter(lambda: reader.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def secure_profile(path: pathlib.Path) -> dict[str, str]:
+    if not path.is_file() or path.is_symlink():
+        fail(f"站点记录不存在或不安全：{path}")
+    metadata = path.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        fail(f"站点记录必须只允许当前用户读取：{path}")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or document.get("format") != PROFILE_FORMAT:
+        fail(f"站点记录格式不受支持：{path}")
+    required = (
+        "siteId", "domain", "sshHost", "sshUser", "sshKey",
+        "primaryKeyDirectory", "backupKeyDirectory", "mediaRoot",
+    )
+    result: dict[str, str] = {}
+    for name in required:
+        value = document.get(name)
+        if not isinstance(value, str) or not value:
+            fail(f"站点记录缺少 {name}")
+        result[name] = value
+    if not SITE_ID_RE.fullmatch(result["siteId"]):
+        fail("站点代号格式不正确")
+    if not DOMAIN_RE.fullmatch(result["domain"]) or not SSH_HOST_RE.fullmatch(result["sshHost"]):
+        fail("站点域名或 SSH 地址格式不正确")
+    if not SSH_USER_RE.fullmatch(result["sshUser"]):
+        fail("SSH 登录用户名格式不正确")
+    return result
+
+
+def profile_root() -> pathlib.Path:
+    return pathlib.Path.home() / "Library" / "Application Support" / "Copper Installer" / "sites"
+
+
+def select_profile(site_id: str | None) -> tuple[pathlib.Path, dict[str, str]]:
+    root = profile_root()
+    if site_id:
+        path = root / f"{site_id}.json"
+        return path, secure_profile(path)
+    profiles = sorted(path for path in root.glob("*.json") if path.is_file() and not path.is_symlink())
+    if not profiles:
+        fail("没有找到已完成安装的站点记录；请先运行 ./copper-install-from-mac")
+    if len(profiles) == 1:
+        return profiles[0], secure_profile(profiles[0])
+    labels = []
+    documents = []
+    for path in profiles:
+        document = secure_profile(path)
+        documents.append(document)
+        labels.append(f"{document['siteId']} · https://{document['domain']}")
+    selected = choose("请选择要维护的 Copper 站点", labels) - 1
+    return profiles[selected], documents[selected]
+
+
+def retired_profile_paths(site_id: str | None = None) -> list[pathlib.Path]:
+    root = profile_root() / "retired"
+    if site_id is not None and not SITE_ID_RE.fullmatch(site_id):
+        fail("站点代号格式不正确")
+    pattern = f"{site_id}-*.json" if site_id else "*.json"
+    return sorted(
+        (path for path in root.glob(pattern) if path.is_file() and not path.is_symlink()),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+
+
+def retired_site_ids() -> list[str]:
+    """Return each safely recorded deleted site once for the home menu."""
+    site_ids: set[str] = set()
+    for path in retired_profile_paths():
+        site_ids.add(secure_profile(path)["siteId"])
+    return sorted(site_ids)
+
+
+def recover_deleted_site(site_id: str | None = None) -> int:
+    retired = retired_profile_paths(site_id)
+    if not retired:
+        fail("没有找到已彻底移除且保留了完整恢复证明的站点记录")
+    recovery = pathlib.Path(__file__).resolve().parent / "copper-recover-from-mac"
+    if not recovery.is_file() or recovery.is_symlink() or not os.access(recovery, os.X_OK):
+        fail(f"当前安装介质缺少灾难恢复入口：{recovery}")
+    command = [str(recovery)]
+    if site_id:
+        command.extend(("--site-id", site_id))
+    return subprocess.run(command, check=False).returncode
+
+
+def global_menu(site_id: str | None = None) -> int:
+    deleted_sites = retired_site_ids()
+    if not deleted_sites:
+        fail("没有找到正在使用或已删除且可恢复的 Copper 站点记录")
+    options = [f"已删除，可从整站备份恢复：{deleted_site}" for deleted_site in deleted_sites]
+    options.append("退出")
+    choice = choose("当前没有正在使用的 Copper 站点", options)
+    if choice <= len(deleted_sites):
+        return recover_deleted_site(deleted_sites[choice - 1])
+    return 0
+
+
+def home_menu(site_id: str | None = None) -> int:
+    """Show active and recoverable deleted sites at the same top level."""
+    if site_id:
+        profile_path, profile = select_profile(site_id)
+        _, primary, secondary, media = require_local_files(profile)
+        return menu(profile_path, profile, primary, secondary, media)
+
+    active_paths = sorted(
+        path for path in profile_root().glob("*.json") if path.is_file() and not path.is_symlink()
+    )
+    deleted_sites = retired_site_ids()
+    if not active_paths:
+        return global_menu()
+
+    active_profiles = [secure_profile(path) for path in active_paths]
+    if len(active_paths) == 1 and not deleted_sites:
+        profile = active_profiles[0]
+        _, primary, secondary, media = require_local_files(profile)
+        return menu(active_paths[0], profile, primary, secondary, media)
+
+    options = [
+        f"正在使用：{profile['siteId']} · https://{profile['domain']}"
+        for profile in active_profiles
+    ]
+    options.extend(
+        f"已删除，可从整站备份恢复：{deleted_site}" for deleted_site in deleted_sites
+    )
+    options.append("退出")
+    choice = choose("请选择 Copper 站点或恢复操作", options)
+    if choice <= len(active_paths):
+        selected = choice - 1
+        profile = active_profiles[selected]
+        _, primary, secondary, media = require_local_files(profile)
+        return menu(active_paths[selected], profile, primary, secondary, media)
+    deleted_index = choice - len(active_paths) - 1
+    if deleted_index < len(deleted_sites):
+        return recover_deleted_site(deleted_sites[deleted_index])
+    return 0
+
+
+def require_local_files(profile: dict[str, str]) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
+    ssh_key = pathlib.Path(profile["sshKey"]).expanduser().resolve()
+    primary = pathlib.Path(profile["primaryKeyDirectory"]).expanduser().resolve()
+    secondary = pathlib.Path(profile["backupKeyDirectory"]).expanduser().resolve()
+    media = pathlib.Path(profile["mediaRoot"]).expanduser().resolve()
+    for path, label in (
+        (ssh_key, "SSH 私钥"),
+        (primary / "copper-age-identity.txt", "客户恢复私钥"),
+        (secondary / "copper-age-identity.txt", "第二份客户恢复私钥"),
+    ):
+        if not path.is_file() or path.is_symlink():
+            fail(f"{label}不存在或不安全：{path}")
+    if stat.S_IMODE(ssh_key.stat().st_mode) & 0o077:
+        fail(f"SSH 私钥权限过宽，请先执行 chmod 600 {ssh_key}")
+    if not (media / "tools/copper-key-offline").is_file():
+        fail(f"安装介质已移动或不完整：{media}")
+    if sha256_file(primary / "copper-age-identity.txt") != sha256_file(secondary / "copper-age-identity.txt"):
+        fail("两份客户恢复私钥不一致，拒绝继续")
+    return ssh_key, primary, secondary, media
+
+
+def ssh_base(profile: dict[str, str], *, tty: bool = False) -> list[str]:
+    ssh_key = pathlib.Path(profile["sshKey"]).expanduser().resolve()
+    command = [
+        "ssh", "-i", str(ssh_key), "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+    ]
+    command.append("-tt" if tty else "-T")
+    command.append(f"{profile['sshUser']}@{profile['sshHost']}")
+    return command
+
+
+def remote(
+    profile: dict[str, str],
+    script: str,
+    *,
+    tty: bool = False,
+    capture: bool = False,
+    check: bool = True,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess:
+    command = [*ssh_base(profile, tty=tty), "bash", "-lc", shlex.quote("set -Eeuo pipefail\n" + script)]
+    return subprocess.run(
+        command,
+        input=input_bytes,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+        check=check,
+    )
+
+
+def scp_base(profile: dict[str, str]) -> list[str]:
+    return [
+        "scp", "-i", str(pathlib.Path(profile["sshKey"]).expanduser().resolve()),
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+    ]
+
+
+def administrator(profile: dict[str, str]) -> None:
+    print(f"\n登录地址：https://{profile['domain']}")
+    print("授权管理员本人可以在下面的服务器菜单查看一次性密码。")
+    remote(profile, "sudo copper-maintain admin", tty=True)
+    if choose("是否已经改密并使用新密码重新登录？", ["已经完成，立即复查", "尚未完成，稍后从本菜单继续"]) == 1:
+        remote(profile, "sudo copper-maintain admin-check", tty=True)
+
+
+def guided_upgrade(profile: dict[str, str]) -> int:
+    entry = pathlib.Path(__file__).resolve().parent / "copper-upgrade-from-mac"
+    if not entry.is_file() or entry.is_symlink() or not os.access(entry, os.X_OK):
+        fail(f"当前安装介质缺少一键升级入口：{entry}")
+    return subprocess.run([str(entry), "--site-id", profile["siteId"]], check=False).returncode
+
+
+def remote_key_ready(profile: dict[str, str]) -> bool:
+    result = remote(profile, "sudo copperctl backup key status >/dev/null 2>&1", check=False)
+    return result.returncode == 0
+
+
+def register_key(profile: dict[str, str], primary: pathlib.Path) -> None:
+    if remote_key_ready(profile):
+        print("客户恢复公钥已经登记，本次不会重复登记。")
+        return
+    mode = choose(
+        "本次交接属于哪一种？",
+        ["内部演练（明确标记 NOT-FORMAL）", "正式客户交接（需要两名真实人员和签署文件）"],
+    )
+    default_evidence = primary / "handover-record.json"
+    if mode == 1:
+        evidence = default_evidence
+        customer = prompt("客户确认人", "CUSTOMER-INTERNAL-NOT-FORMAL")
+        witness = prompt("复核见证人", "WITNESS-INTERNAL-NOT-FORMAL")
+    else:
+        evidence = pathlib.Path(prompt("已签署交接文件位置")).expanduser().resolve()
+        customer = prompt("客户确认人真实姓名")
+        witness = prompt("复核见证人真实姓名")
+        if "NOT-FORMAL" in customer.upper() or "NOT-FORMAL" in witness.upper():
+            fail("正式交接不能使用演练身份")
+    if not evidence.is_file() or evidence.is_symlink():
+        fail(f"交接文件不存在或不安全：{evidence}")
+    if not customer or not witness or customer.casefold() == witness.casefold():
+        fail("客户确认人和复核见证人必须是两名不同人员")
+    digest = sha256_file(evidence)
+    command = (
+        "sudo copperctl backup key register "
+        f"--handover-sha256 {shlex.quote(digest)} "
+        f"--customer-confirmed-by {shlex.quote(customer)} "
+        f"--witness-confirmed-by {shlex.quote(witness)}\n"
+        "sudo copperctl backup key audit"
+    )
+    remote(profile, command, tty=True)
+    if mode == 1:
+        print("本次只形成内部演练记录，不构成正式客户双人签署。")
+
+
+def latest_backup_name(profile: dict[str, str]) -> str:
+    script = r"""
+name="$(sudo find /var/backups/copper -maxdepth 1 -type f -name '*.copperbak' -printf '%T@ %f\n' | sort -n | tail -1 | awk '{print $2}')"
+test -n "$name"
+printf '%s' "$name"
+"""
+    result = remote(profile, script, capture=True)
+    name = result.stdout.decode("utf-8").strip()
+    if not BACKUP_RE.fullmatch(name) or not name.startswith(profile["siteId"] + "_"):
+        fail("服务器返回的备份文件名不符合当前站点规则")
+    return name
+
+
+def verify_sidecar(archive: pathlib.Path) -> None:
+    sidecar = pathlib.Path(str(archive) + ".sha256")
+    verify_sidecar_file(archive, sidecar, archive.name)
+
+
+def verify_sidecar_file(archive: pathlib.Path, sidecar: pathlib.Path, expected_name: str) -> None:
+    if not sidecar.is_file() or sidecar.is_symlink():
+        fail(f"缺少校验文件：{sidecar}")
+    lines = sidecar.read_text(encoding="ascii").splitlines()
+    if len(lines) != 1:
+        fail("备份校验文件格式不正确")
+    match = re.fullmatch(r"([0-9a-f]{64})  (.+)", lines[0])
+    if not match or match.group(2) != expected_name or sha256_file(archive) != match.group(1):
+        fail("备份文件与 SHA-256 校验文件不一致")
+
+
+def copy_checked(source: pathlib.Path, destination: pathlib.Path) -> None:
+    destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(destination.parent, 0o700)
+    if destination.exists():
+        if not destination.is_file() or destination.is_symlink() or sha256_file(destination) != sha256_file(source):
+            fail(f"目标已有不同文件，拒绝覆盖：{destination}")
+        return
+    shutil.copy2(source, destination)
+    if sha256_file(destination) != sha256_file(source):
+        destination.unlink(missing_ok=True)
+        fail(f"复制后校验失败：{destination}")
+    os.chmod(destination, 0o600)
+
+
+def download_backup(
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    name = latest_backup_name(profile)
+    remote_dir = f".copper-operator-transfer/{profile['siteId']}"
+    remote(profile, f"""
+install -d -m 0700 "$HOME/{remote_dir}"
+sudo install -o "$(id -un)" -g "$(id -gn)" -m 0600 /var/backups/copper/{shlex.quote(name)} "$HOME/{remote_dir}/{shlex.quote(name)}"
+sudo install -o "$(id -un)" -g "$(id -gn)" -m 0600 /var/backups/copper/{shlex.quote(name)}.sha256 "$HOME/{remote_dir}/{shlex.quote(name)}.sha256"
+""")
+    download_root = primary / "backups"
+    download_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    archive = download_root / name
+    sidecar = pathlib.Path(str(archive) + ".sha256")
+    temporary_archive = download_root / f".{name}.downloading"
+    temporary_sidecar = pathlib.Path(str(temporary_archive) + ".sha256")
+    temporary_archive.unlink(missing_ok=True)
+    temporary_sidecar.unlink(missing_ok=True)
+    source = f"{profile['sshUser']}@{profile['sshHost']}:{remote_dir}/"
+    try:
+        subprocess.run([*scp_base(profile), source + name, str(temporary_archive)], check=True)
+        subprocess.run([*scp_base(profile), source + name + ".sha256", str(temporary_sidecar)], check=True)
+        os.chmod(temporary_archive, 0o600)
+        os.chmod(temporary_sidecar, 0o600)
+        verify_sidecar_file(temporary_archive, temporary_sidecar, archive.name)
+        copy_checked(temporary_archive, archive)
+        copy_checked(temporary_sidecar, sidecar)
+        verify_sidecar(archive)
+    finally:
+        remote(profile, f"rm -f \"$HOME/{remote_dir}/{name}\" \"$HOME/{remote_dir}/{name}.sha256\"", check=False)
+        temporary_archive.unlink(missing_ok=True)
+        temporary_sidecar.unlink(missing_ok=True)
+    copy_checked(archive, secondary / "backups" / archive.name)
+    copy_checked(sidecar, secondary / "backups" / sidecar.name)
+    print(f"备份已下载并校验：{archive}")
+    print(f"第二位置副本：{secondary / 'backups' / archive.name}")
+    return archive, sidecar
+
+
+def offline_verify_and_record(
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    media: pathlib.Path,
+    archive: pathlib.Path,
+    *,
+    monitor: bool = True,
+) -> pathlib.Path:
+    receipt = primary / "backups" / f"{archive.stem}-verification.json"
+    if not receipt.exists():
+        subprocess.run(
+            [
+                sys.executable, str(media / "tools/copper-key-offline"), "verify-backup",
+                "--identity", str(primary / "copper-age-identity.txt"),
+                "--archive", str(archive), "--receipt", str(receipt),
+            ],
+            check=True,
+        )
+    os.chmod(receipt, 0o600)
+    copy_checked(receipt, secondary / "backups" / receipt.name)
+    remote_path = f".copper-operator-receipts/{receipt.name}"
+    remote(profile, "install -d -m 0700 \"$HOME/.copper-operator-receipts\"")
+    subprocess.run(
+        [*scp_base(profile), str(receipt), f"{profile['sshUser']}@{profile['sshHost']}:{remote_path}"],
+        check=True,
+    )
+    command = (
+        f"trap 'rm -f \"$HOME/{remote_path}\"' EXIT\n"
+        f"sudo copperctl backup key record-restore-test \"$HOME/{remote_path}\"\n"
+        "sudo copperctl backup key audit"
+    )
+    if monitor:
+        command += "\nsudo copperctl monitor check"
+    remote(profile, command, tty=True)
+    return receipt
+
+
+def create_download_verify(
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    media: pathlib.Path,
+    *,
+    decommission: bool = False,
+) -> ProtectionResult:
+    register_key(profile, primary)
+    print("\n服务器将创建一致性加密整站备份；网页会短暂停止写入。")
+    command = "sudo copperctl backup create\nsudo copperctl backup status"
+    if decommission:
+        command += "\nsudo copperctl stop"
+        print("备份完成后站点会保持停止，避免离线验证期间又产生未备份的新数据。")
+    remote(profile, command, tty=True)
+    archive, _ = download_backup(profile, primary, secondary)
+    receipt = offline_verify_and_record(profile, primary, secondary, media, archive, monitor=not decommission)
+    if not decommission:
+        remote(profile, "sudo copperctl backup schedule install\nsudo copperctl backup schedule status", tty=True)
+    print(f"离线验证回执：{receipt}")
+    if decommission:
+        print("\n数据保护已完成：加密备份、离线验证和第二位置副本均已处理。")
+        print("站点当前保持停止；取消彻底移除时程序会自动恢复服务。")
+    else:
+        print("\n数据保护已完成：加密备份、离线验证、第二位置副本和每日计划均已处理。")
+        print("提醒：服务器每天仍先写入本机；如需无人值守的异机复制和异机告警，还要配置 NAS/S3 与通知地址。")
+    return ProtectionResult(archive, receipt)
+
+
+def show_status(profile: dict[str, str]) -> None:
+    print(f"\n站点：https://{profile['domain']}")
+    remote(
+        profile,
+        "sudo copper-install status\n"
+        "sudo copperctl doctor\n"
+        "sudo copperctl monitor check\n"
+        "sudo copperctl backup status\n"
+        "sudo copperctl backup schedule status",
+        tty=True,
+    )
+
+
+def manage_remote_access(profile: dict[str, str]) -> None:
+    print("\n将打开当前站点的互联网远程访问维护菜单。")
+    print("普通维护只需选择序号；首次配置或轮换时按提示粘贴 Tunnel Token，不需要复制命令。")
+    remote(profile, "sudo copper-maintain remote-access", tty=True)
+
+
+def pending_restore_path(primary: pathlib.Path, site_id: str) -> pathlib.Path:
+    return primary / "restore-rehearsals" / f"{site_id}-pending.json"
+
+
+def discard_rehearsal(profile: dict[str, str], restore_id: str) -> None:
+    if not RESTORE_ID_RE.fullmatch(restore_id):
+        fail("待清理的恢复演练编号格式不正确")
+    remote(
+        profile,
+        f"sudo copperctl backup restore discard {shlex.quote(restore_id)} "
+        f"--confirm {shlex.quote('DISCARD ' + restore_id)}\n"
+        "sudo copperctl monitor check",
+        tty=True,
+    )
+
+
+def reconcile_pending_rehearsal(profile: dict[str, str], primary: pathlib.Path) -> bool:
+    pending_path = pending_restore_path(primary, profile["siteId"])
+    if not pending_path.exists() and not pending_path.is_symlink():
+        return True
+    pending = secure_private_json(pending_path, "未完成恢复演练记录")
+    if pending.get("formatVersion") != PENDING_RESTORE_FORMAT or pending.get("siteId") != profile["siteId"]:
+        fail("未完成恢复演练记录与当前站点不一致")
+    restore_id = pending.get("restoreId")
+    if not isinstance(restore_id, str) or not RESTORE_ID_RE.fullmatch(restore_id):
+        fail("未完成恢复演练记录缺少安全的恢复编号")
+    status = remote(
+        profile,
+        f"sudo copperctl backup restore status {shlex.quote(restore_id)} >/dev/null 2>&1",
+        check=False,
+    )
+    if status.returncode == 1:
+        pending_path.unlink(missing_ok=True)
+        print("上次恢复演练没有服务器残留，已清理本机中断记录。")
+        return True
+    if status.returncode != 0:
+        fail("暂时无法核对上次恢复演练；中断记录已保留，请检查网络后重试")
+    print(f"检测到上次保留或中断的恢复演练：{restore_id}")
+    if choose("先处理上次恢复演练", ["删除上次旁路恢复（推荐）", "继续保留并返回主菜单"]) != 1:
+        print("上次旁路恢复继续保留；为避免端口冲突，本次不再创建新的恢复演练。")
+        return False
+    discard_rehearsal(profile, restore_id)
+    pending_path.unlink(missing_ok=True)
+    print("上次旁路恢复已经清理，可以开始新的恢复演练。")
+    return True
+
+
+def restore_rehearsal(profile: dict[str, str], primary: pathlib.Path) -> None:
+    if not reconcile_pending_rehearsal(profile, primary):
+        return
+    backups = sorted((primary / "backups").glob("*.copperbak"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if not backups:
+        fail("本机还没有已下载的 Copper 备份；请先选择“完成数据保护”或“创建并下载备份”")
+    archive = backups[0]
+    if not BACKUP_RE.fullmatch(archive.name):
+        fail("本地备份文件名不符合安全规则")
+    verify_sidecar(archive)
+    identity = primary / "copper-age-identity.txt"
+    restore_id = "operator-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    pending_path = pending_restore_path(primary, profile["siteId"])
+    write_private_json(
+        pending_path,
+        {
+            "formatVersion": PENDING_RESTORE_FORMAT,
+            "status": "INTERNAL_REHEARSAL_ONLY",
+            "siteId": profile["siteId"],
+            "restoreId": restore_id,
+            "archive": str(archive),
+            "createdAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+    volatile = f"/run/copper-{restore_id}-identity.txt"
+    remote_input_dir = f".copper-restore-input/{profile['siteId']}"
+    remote_archive = f"$HOME/{remote_input_dir}/{archive.name}"
+    remote(profile, "test \"$(findmnt -n -o FSTYPE /run)\" = tmpfs")
+    cleanup = f"sudo rm -f {shlex.quote(volatile)}\nrm -f \"{remote_archive}\" \"{remote_archive}.sha256\""
+    try:
+        remote(profile, f"install -d -m 0700 \"$HOME/{remote_input_dir}\"")
+        subprocess.run(
+            [*scp_base(profile), str(archive), f"{profile['sshUser']}@{profile['sshHost']}:{remote_input_dir}/{archive.name}"],
+            check=True,
+        )
+        subprocess.run(
+            [*scp_base(profile), str(archive) + ".sha256", f"{profile['sshUser']}@{profile['sshHost']}:{remote_input_dir}/{archive.name}.sha256"],
+            check=True,
+        )
+        with identity.open("rb") as reader:
+            remote(
+                profile,
+                f"sudo tee {shlex.quote(volatile)} >/dev/null\nsudo chown root:root {shlex.quote(volatile)}\nsudo chmod 0400 {shlex.quote(volatile)}",
+                input_bytes=reader.read(),
+            )
+        command = f"""
+cleanup() {{ sudo rm -f {shlex.quote(volatile)}; }}
+cleanup_input() {{ rm -f \"{remote_archive}\" \"{remote_archive}.sha256\"; }}
+trap 'cleanup; cleanup_input' EXIT HUP INT TERM
+sudo copperctl backup restore stage \"{remote_archive}\" --identity {shlex.quote(volatile)} --restore-id {shlex.quote(restore_id)} --port 18080
+cleanup
+cleanup_input
+trap - EXIT HUP INT TERM
+sudo copperctl backup restore status {shlex.quote(restore_id)}
+curl --fail http://127.0.0.1:18080/readyz
+sudo test ! -e {shlex.quote(volatile)}
+sudo copperctl monitor check
+"""
+        remote(profile, command, tty=True)
+    finally:
+        remote(profile, cleanup, check=False)
+    print("\n旁路恢复已经验证，正式站点数据没有修改。")
+    if choose("是否立即删除本次旁路恢复？", ["删除旁路恢复（推荐）", "暂时保留，稍后由维护人员处理"]) == 1:
+        discard_rehearsal(profile, restore_id)
+        pending_path.unlink(missing_ok=True)
+    else:
+        print("已保存待清理记录；下次进入恢复演练时会先提示处理，不需要维护人员查找命令。")
+
+
+def write_receipt_copy(path: pathlib.Path, document: dict[str, object]) -> tuple[pathlib.Path, pathlib.Path]:
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    content = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    sidecar = pathlib.Path(str(path) + ".sha256")
+    if path.exists() or path.is_symlink():
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_uid != os.getuid()
+            or stat.S_IMODE(path.stat().st_mode) & 0o077
+            or path.read_text(encoding="utf-8") != content
+        ):
+            fail(f"卸载回执目标已存在且内容不同，拒绝覆盖：{path}")
+        expected_sidecar = f"{sha256_file(path)}  {path.name}\n"
+        if sidecar.is_symlink() or not sidecar.is_file() or sidecar.read_text(encoding="ascii") != expected_sidecar:
+            fail(f"既有卸载回执校验文件不正确：{sidecar}")
+        return path, sidecar
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as writer:
+            writer.write(content)
+            writer.flush()
+            os.fsync(writer.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    sidecar.write_text(f"{sha256_file(path)}  {path.name}\n", encoding="ascii")
+    os.chmod(sidecar, 0o600)
+    return path, sidecar
+
+
+def receipt_backup_fields(receipt: pathlib.Path, archive: pathlib.Path) -> tuple[str, str, str]:
+    try:
+        document = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ManagerError("离线验证回执无法读取") from error
+    backup_id = str(document.get("backupId") or "") if isinstance(document, dict) else ""
+    backup_sha = str(document.get("backupSha256") or "") if isinstance(document, dict) else ""
+    if (
+        document.get("formatVersion") != "copper-key-backup-verification/v1"
+        or document.get("result") != "PASSED"
+        or not re.fullmatch(r"[0-9a-f]{32}", backup_id)
+        or not re.fullmatch(r"[0-9a-f]{64}", backup_sha)
+        or backup_sha != sha256_file(archive)
+    ):
+        fail("离线验证回执与刚下载的整站备份不一致")
+    return backup_id, backup_sha, sha256_file(receipt)
+
+
+def write_private_json(path: pathlib.Path, document: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.unlink(missing_ok=True)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as writer:
+            json.dump(document, writer, ensure_ascii=False, indent=2, sort_keys=True)
+            writer.write("\n")
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def secure_private_json(path: pathlib.Path, label: str) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        fail(f"{label}不存在或不安全：{path}")
+    metadata = path.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077 or metadata.st_size > 1024 * 1024:
+        fail(f"{label}必须只允许当前用户读取：{path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ManagerError(f"{label}无法读取：{path}") from error
+    if not isinstance(document, dict):
+        fail(f"{label}格式不正确：{path}")
+    return document
+
+
+def pending_removal_path(primary: pathlib.Path, site_id: str) -> pathlib.Path:
+    return primary / "uninstall-receipts" / f".{site_id}-pending.json"
+
+
+def pending_protection(
+    pending: dict[str, object],
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+) -> tuple[ProtectionResult, str, str, str, str]:
+    if (
+        pending.get("formatVersion") != PENDING_REMOVAL_FORMAT
+        or pending.get("status") != "INTERNAL_REHEARSAL_ONLY"
+        or pending.get("siteId") != profile["siteId"]
+        or pending.get("domain") != profile["domain"]
+        or pending.get("phase") not in ("PREPARED", "SERVER_REMOVED")
+    ):
+        fail("未完成卸载记录与当前站点不一致")
+    archive = pathlib.Path(str(pending.get("archive") or "")).expanduser().resolve()
+    receipt = pathlib.Path(str(pending.get("verificationReceipt") or "")).expanduser().resolve()
+    if archive.parent != (primary / "backups").resolve() or receipt.parent != (primary / "backups").resolve():
+        fail("未完成卸载记录引用了客户恢复目录之外的文件")
+    if archive.is_symlink() or not archive.is_file() or receipt.is_symlink() or not receipt.is_file():
+        fail("未完成卸载所需的备份或离线验证回执已经丢失")
+    verify_sidecar(archive)
+    secondary_archive = secondary / "backups" / archive.name
+    secondary_sidecar = pathlib.Path(str(secondary_archive) + ".sha256")
+    verify_sidecar_file(secondary_archive, secondary_sidecar, archive.name)
+    if sha256_file(secondary_archive) != sha256_file(archive):
+        fail("未完成卸载的两份备份不一致")
+    backup_id, backup_sha, receipt_sha = receipt_backup_fields(receipt, archive)
+    if (
+        pending.get("backupId") != backup_id
+        or pending.get("backupSha256") != backup_sha
+        or pending.get("receiptSha256") != receipt_sha
+    ):
+        fail("未完成卸载记录与备份证明不一致")
+    stamp = str(pending.get("stamp") or "")
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", stamp):
+        fail("未完成卸载记录的时间标识不正确")
+    return ProtectionResult(archive, receipt), backup_id, backup_sha, receipt_sha, stamp
+
+
+def probe_remote_removal(profile: dict[str, str]) -> str:
+    script = r"""
+if sudo test ! -e /etc/copper && sudo test ! -e /var/lib/copper && sudo test ! -e /opt/copper && sudo test ! -e /usr/local/sbin/copper-install; then
+  printf '__REMOVED__\n'
+elif sudo test -f /etc/copper/copper.env && sudo test -d /var/lib/copper && sudo test -x /usr/local/sbin/copper-install; then
+  printf '__PRESENT__\n'
+else
+  printf '__PARTIAL__\n'
+fi
+"""
+    result = remote(profile, script, capture=True, check=False)
+    if result.returncode != 0:
+        return "UNREACHABLE"
+    lines = (result.stdout or b"").decode("utf-8", errors="replace").splitlines()
+    marker = lines[-1].strip() if lines else ""
+    return {"__REMOVED__": "REMOVED", "__PRESENT__": "PRESENT", "__PARTIAL__": "PARTIAL"}.get(marker, "UNKNOWN")
+
+
+def server_remove_command(profile: dict[str, str], backup_id: str, backup_sha: str, receipt_sha: str) -> str:
+    return (
+        "sudo copper-install remove-site "
+        f"--site-id {shlex.quote(profile['siteId'])} "
+        f"--backup-id {shlex.quote(backup_id)} "
+        f"--backup-sha256 {shlex.quote(backup_sha)} "
+        f"--receipt-sha256 {shlex.quote(receipt_sha)}"
+    )
+
+
+def cleanup_remote_operator_files(profile: dict[str, str]) -> None:
+    remote(
+        profile,
+        "rm -rf -- \"$HOME/.copper-installer-media\" \"$HOME/.copper-operator-transfer\" "
+        "\"$HOME/.copper-operator-receipts\" \"$HOME/.copper-restore-input\"",
+        check=False,
+    )
+
+
+def assert_remote_site_removed(profile: dict[str, str]) -> None:
+    script = r"""
+residue=0
+for path in /etc/copper /var/lib/copper /var/lib/copper-installer /var/lib/copper-restores /var/backups/copper /opt/copper /usr/local/sbin/copper-install /usr/local/sbin/copperctl /usr/local/sbin/copper-maintain "$HOME/.copper-installer-media" "$HOME/.copper-operator-transfer" "$HOME/.copper-operator-receipts" "$HOME/.copper-restore-input"; do
+  if sudo test -e "$path" || sudo test -L "$path"; then
+    printf 'RESIDUE:%s\n' "$path"
+    residue=1
+  fi
+done
+if sudo docker ps -a --format '{{.Names}} {{.Image}}' | awk 'tolower($0) ~ /copper/ {found=1} END {exit found ? 0 : 1}'; then
+  printf 'RESIDUE:containers\n'
+  residue=1
+fi
+if sudo docker image ls --format '{{.Repository}}' | awk 'tolower($0) ~ /^ghcr.io\/soyia\/copper_(web|backend|mysql)$/ {found=1} END {exit found ? 0 : 1}'; then
+  printf 'RESIDUE:images\n'
+  residue=1
+fi
+if sudo docker network ls --format '{{.Name}}' | awk 'tolower($0) ~ /^copper([_-]|$)/ {found=1} END {exit found ? 0 : 1}'; then
+  printf 'RESIDUE:networks\n'
+  residue=1
+fi
+if systemctl list-unit-files --no-legend | awk '$1 ~ /^copper/ {found=1} END {exit found ? 0 : 1}'; then
+  printf 'RESIDUE:systemd\n'
+  residue=1
+fi
+test "$residue" -eq 0
+printf '__COPPER_SITE_REMOVED__\n'
+"""
+    result = remote(profile, script, capture=True, check=False)
+    output = (result.stdout or b"").decode("utf-8", errors="replace").strip()
+    if result.returncode != 0 or output != "__COPPER_SITE_REMOVED__":
+        fail("服务器仍有 Copper 残留，未生成卸载完成回执：" + (output or "未返回验空结果"))
+
+
+def retire_profile(profile_path: pathlib.Path, site_id: str, stamp: str) -> pathlib.Path:
+    retired = profile_path.parent / "retired"
+    retired.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(retired, 0o700)
+    destination = retired / f"{site_id}-{stamp}.json"
+    if destination.exists() or destination.is_symlink():
+        fail(f"已存在同名停用站点记录：{destination}")
+    os.replace(profile_path, destination)
+    os.chmod(destination, 0o600)
+    return destination
+
+
+def preserve_data_uninstall(profile: dict[str, str]) -> None:
+    expected = f"UNINSTALL {profile['siteId']}"
+    print("\n这会停止并移除 Copper 服务，但完整保留数据库、图片、配置、密钥和备份。")
+    if prompt(f'请输入 "{expected}" 继续') != expected:
+        print("没有确认，站点未改变。")
+        return
+    remote(profile, "sudo copper-install uninstall", tty=True)
+    result = remote(
+        profile,
+        "sudo test -f /etc/copper/copper.env\n"
+        "sudo test -d /var/lib/copper\n"
+        "sudo test -d /var/backups/copper\n"
+        "sudo test -L /usr/local/sbin/copper-install\n"
+        "test -z \"$(sudo docker ps -aq --filter name=copper)\"\n"
+        "printf '__COPPER_DATA_PRESERVED__\\n'",
+        capture=True,
+    )
+    if (result.stdout or b"").decode().strip() != "__COPPER_DATA_PRESERVED__":
+        fail("保留数据卸载后的复查未通过")
+    print("站点已停止使用，数据仍完整保留。需要时可从本菜单重新启用。")
+
+
+def reactivate_preserved_site(profile: dict[str, str]) -> None:
+    print("\n正在使用原配置、原密钥和原数据重新启用 Copper……")
+    remote(
+        profile,
+        "sudo copper-install repair\n"
+        "sudo copperctl status\n"
+        "sudo copperctl monitor check",
+        tty=True,
+    )
+    print(f"站点已重新启用：https://{profile['domain']}")
+
+
+def backup_then_remove_site(
+    profile_path: pathlib.Path,
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    media: pathlib.Path,
+) -> pathlib.Path | None:
+    print("\n彻底移除会永久删除服务器上的数据库、图片、配置、本地备份和 Copper 安装程序。")
+    print("程序会先创建新整站备份、下载、离线验证并复制到第二位置；任一步失败都不会进入删除。")
+    pending_path = pending_removal_path(primary, profile["siteId"])
+    if pending_path.exists() or pending_path.is_symlink():
+        pending = secure_private_json(pending_path, "未完成卸载记录")
+        print("检测到上次未完成的彻底移除；备份、离线验证和第二位置副本将复用，不要求重新输入。")
+        if choose("是否继续上次操作？", ["继续上次操作", "暂不处理，保持现场"]) != 1:
+            print("已保留未完成记录和服务器现场；下次从同一入口继续。")
+            return None
+        result, backup_id, backup_sha, verification_sha, stamp = pending_protection(
+            pending, profile, primary, secondary
+        )
+    else:
+        if choose("是否继续？", ["继续备份并准备彻底移除", "返回上一级"]) != 1:
+            print("已返回，站点未改变。")
+            return None
+        try:
+            result = create_download_verify(profile, primary, secondary, media, decommission=True)
+            backup_id, backup_sha, verification_sha = receipt_backup_fields(
+                result.verification_receipt, result.archive
+            )
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            pending = {
+                "formatVersion": PENDING_REMOVAL_FORMAT,
+                "status": "INTERNAL_REHEARSAL_ONLY",
+                "phase": "PREPARED",
+                "siteId": profile["siteId"],
+                "domain": profile["domain"],
+                "archive": str(result.archive),
+                "verificationReceipt": str(result.verification_receipt),
+                "backupId": backup_id,
+                "backupSha256": backup_sha,
+                "receiptSha256": verification_sha,
+                "stamp": stamp,
+                "preparedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
+            write_private_json(pending_path, pending)
+        except BaseException:
+            remote(
+                profile,
+                "sudo copperctl up\nsudo copperctl monitor check",
+                tty=True,
+                check=False,
+            )
+            raise
+
+    if pending["phase"] == "PREPARED":
+        command = server_remove_command(profile, backup_id, backup_sha, verification_sha)
+        try:
+            remote(profile, command, tty=True)
+        except subprocess.CalledProcessError as error:
+            remote_state = probe_remote_removal(profile)
+            if remote_state == "REMOVED":
+                pending["phase"] = "SERVER_REMOVED"
+            elif remote_state == "PARTIAL":
+                print("服务器已进入受控清理阶段，正在从安全检查点再试一次……")
+                remote(profile, command, tty=True)
+                pending["phase"] = "SERVER_REMOVED"
+            elif remote_state == "PRESENT":
+                pending_path.unlink(missing_ok=True)
+                remote(
+                    profile,
+                    "sudo copperctl up\nsudo copperctl monitor check",
+                    tty=True,
+                    check=False,
+                )
+                raise ManagerError("服务器尚未开始删除，站点已恢复；下次会重新创建最新备份") from error
+            else:
+                raise ManagerError(
+                    "连接在删除确认后中断，现场和证明均已保留；网络恢复后重新运行同一入口即可继续"
+                ) from error
+        else:
+            pending["phase"] = "SERVER_REMOVED"
+        pending["serverRemovedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        write_private_json(pending_path, pending)
+
+    cleanup_remote_operator_files(profile)
+    assert_remote_site_removed(profile)
+    retired_profile = profile_path.parent / "retired" / f"{profile['siteId']}-{stamp}.json"
+    document: dict[str, object] = {
+        "formatVersion": REMOVAL_RECEIPT_FORMAT,
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "result": "PASSED",
+        "mode": "BACKUP_THEN_REMOVE",
+        "siteId": profile["siteId"],
+        "domain": profile["domain"],
+        "server": f"{profile['sshUser']}@{profile['sshHost']}",
+        "removedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "backup": {
+            "backupId": backup_id,
+            "fileName": result.archive.name,
+            "sha256": backup_sha,
+            "primaryCopy": str(result.archive),
+            "secondaryCopy": str(secondary / "backups" / result.archive.name),
+            "verificationReceipt": str(result.verification_receipt),
+            "verificationReceiptSha256": verification_sha,
+        },
+        "retained": {
+            "primaryRecoveryKeyDirectory": str(primary),
+            "secondaryRecoveryKeyDirectory": str(secondary),
+            "retiredSiteProfile": str(retired_profile),
+            "operatingSystem": True,
+            "docker": True,
+            "ssh": True,
+            "dns": True,
+        },
+        "serverResidueCheck": "PASSED",
+    }
+    receipt_root = primary / "uninstall-receipts"
+    receipt, sidecar = write_receipt_copy(receipt_root / f"{profile['siteId']}-{stamp}.json", document)
+    copy_checked(receipt, secondary / "uninstall-receipts" / receipt.name)
+    copy_checked(sidecar, secondary / "uninstall-receipts" / sidecar.name)
+    pending_path.unlink(missing_ok=True)
+    actual_retired_profile = retire_profile(profile_path, profile["siteId"], stamp)
+    if actual_retired_profile != retired_profile:
+        fail("本机站点记录退役位置与卸载回执不一致")
+    print("\n站点已经彻底移除，服务器验空通过。")
+    print(f"卸载回执：{receipt}")
+    print(f"第二位置回执：{secondary / 'uninstall-receipts' / receipt.name}")
+    print("客户恢复私钥、两份加密备份、Ubuntu、Docker、SSH 和 DNS 均未删除。")
+    return receipt
+
+
+def removal_menu(
+    profile_path: pathlib.Path,
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    media: pathlib.Path,
+) -> bool:
+    choice = choose(
+        "停止使用或彻底移除",
+        [
+            "停止使用，保留全部数据",
+            "重新启用已保留数据的站点",
+            "创建并离线验证整站备份后，彻底移除站点",
+            "返回",
+        ],
+    )
+    if choice == 1:
+        preserve_data_uninstall(profile)
+    elif choice == 2:
+        reactivate_preserved_site(profile)
+    elif choice == 3:
+        if backup_then_remove_site(profile_path, profile, primary, secondary, media) is not None:
+            return True
+    return False
+
+
+def menu(
+    profile_path: pathlib.Path,
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    media: pathlib.Path,
+) -> int:
+    while True:
+        print(f"\nCopper 本机管理 · {profile['siteId']} · https://{profile['domain']}")
+        choice = choose(
+            "请选择要做的事情",
+            [
+                "首次管理员登录和改密复查",
+                "完成数据保护（推荐安装后立即执行）",
+                "检查系统和备份状态",
+                "互联网远程访问（Cloudflare，可选）",
+                "立即创建、下载并离线验证一份备份",
+                "做一次不影响正式数据的恢复演练",
+                "升级 Copper（自动备份、迁移、切换和失败保护）",
+                "停止使用、重新启用或彻底移除站点",
+                "从整站备份恢复已删除的站点",
+                "退出",
+            ],
+        )
+        if choice == 1:
+            administrator(profile)
+        elif choice == 2:
+            create_download_verify(profile, primary, secondary, media)
+        elif choice == 3:
+            show_status(profile)
+        elif choice == 4:
+            manage_remote_access(profile)
+        elif choice == 5:
+            create_download_verify(profile, primary, secondary, media)
+        elif choice == 6:
+            restore_rehearsal(profile, primary)
+        elif choice == 7:
+            guided_upgrade(profile)
+        elif choice == 8:
+            if removal_menu(profile_path, profile, primary, secondary, media):
+                return 0
+        elif choice == 9:
+            return recover_deleted_site()
+        else:
+            return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Copper Mac 本机管理与数据保护入口")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("menu", "admin", "protect", "status", "backup", "restore-rehearsal", "upgrade", "uninstall-preserve", "reactivate", "remove-site", "recover-deleted"),
+        default="menu",
+    )
+    parser.add_argument("--site-id")
+    args = parser.parse_args(argv)
+    if sys.platform != "darwin":
+        fail("本入口当前只支持 Mac；Ubuntu 服务器请运行 sudo copper-maintain")
+    if args.command == "recover-deleted":
+        return recover_deleted_site(args.site_id)
+    if args.command == "menu":
+        return home_menu(args.site_id)
+    profile_path, profile = select_profile(args.site_id)
+    _, primary, secondary, media = require_local_files(profile)
+    if args.command == "admin":
+        administrator(profile)
+    elif args.command in ("protect", "backup"):
+        create_download_verify(profile, primary, secondary, media)
+    elif args.command == "status":
+        show_status(profile)
+    elif args.command == "restore-rehearsal":
+        restore_rehearsal(profile, primary)
+    elif args.command == "upgrade":
+        return guided_upgrade(profile)
+    elif args.command == "uninstall-preserve":
+        preserve_data_uninstall(profile)
+    elif args.command == "reactivate":
+        reactivate_preserved_site(profile)
+    elif args.command == "remove-site":
+        backup_then_remove_site(profile_path, profile, primary, secondary, media)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\n操作已暂停；未完成记录和数据保护证明均会保留。重新运行同一入口即可继续。", file=sys.stderr)
+        raise SystemExit(130)
+    except (ManagerError, OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        print(f"\n操作已停止：{error}", file=sys.stderr)
+        print("已有数据、密钥和已下载备份不会被删除或覆盖。修正提示后可重新运行同一入口。", file=sys.stderr)
+        raise SystemExit(3)

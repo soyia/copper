@@ -1,0 +1,23 @@
+{
+  "format": "copper-publication-exact-technical-review/v1",
+  "reviewedAt": "2026-10-26T00:57:11.113411+00:00",
+  "scope": "ONLY_THE_TWO_CURRENT_ARCHIVE_PATH_FINDINGS",
+  "classification": "PUBLIC_SYNTHETIC_ACCEPTANCE_ARTIFACT_PATH_HEURISTIC_FALSE_POSITIVE",
+  "humanApprovalClaimed": false,
+  "baselineModified": false,
+  "rawAuditDecisionModified": false,
+  "reviewEvidence": "Independent backend agent matched 157 evidence archive members and 15 frozen driver members byte-for-byte to previously verified local closed inventories; no unsafe paths, symlinks, backup payload, private identity or customer records. Six API reports explicitly synthetic=true/customerDataUsed=false.",
+  "archiveSha256": [
+    "15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb",
+    "2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d"
+  ],
+  "originalCurrentFindingIds": [
+    "ba88129848ababab659aa85af174d0972dc7c33a48a9e8dfbafb44bd2d0b4ccb",
+    "d399aef9a7815f4866764d018c948ed716a2bfe2ad5049d8c4b1988774d03702"
+  ],
+  "candidateFindingIds": [
+    "de12b7ababc57be11708a54424424d76094d97ee9f64efaf2b8ca8e2c696655e",
+    "e0949d4155076a2dff4601da7fe4be34bcb7bda69fa88b628230aff57e9e66c9"
+  ],
+  "historyFindingsApproved": false
+}

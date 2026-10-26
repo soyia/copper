@@ -1,0 +1,10 @@
+{
+  "format": "copper-release-fk-restore-crosscheck/v1",
+  "status": "PASS",
+  "coreProtectedMappings": 78,
+  "actualForeignKeys": 92,
+  "zeroOrphanChecks": 92,
+  "databaseVersion": "8.4.11",
+  "schemaVersion": 67,
+  "customerDataUsed": false
+}

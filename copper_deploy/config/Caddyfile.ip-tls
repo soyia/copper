@@ -1,0 +1,28 @@
+{
+	admin off
+	default_sni {$COPPER_SITE_ADDRESS}
+}
+
+https://{$COPPER_SITE_ADDRESS} {
+	tls /etc/copper/tls/fullchain.pem /etc/copper/tls/privkey.pem
+	import /etc/caddy/Caddyfile.common
+}
+
+http://{$COPPER_SITE_ADDRESS} {
+	handle /.well-known/acme-challenge/* {
+		root * /var/lib/acme
+		file_server
+	}
+
+	handle {
+		redir https://{$COPPER_SITE_ADDRESS}{uri} permanent
+	}
+}
+
+http://127.0.0.1:8081 {
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	respond 404
+}

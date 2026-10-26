@@ -1,0 +1,807 @@
+#!/usr/bin/env python3
+"""Guided full-site recovery after a verified backup-then-remove operation."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import os
+import pathlib
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+
+
+ROOT = pathlib.Path(__file__).resolve().parent
+RECOVERY_FORMAT = "copper-guided-disaster-recovery/v1"
+RECOVERY_RECEIPT_FORMAT = "copper-guided-disaster-recovery-receipt/v1"
+RETIRED_NAME_RE = re.compile(r"^([a-z0-9][a-z0-9-]{2,31})-([0-9]{8}-[0-9]{6})\.json$")
+PHASES = {
+    "SELECTED",
+    "INSTALLED",
+    "ADMIN_READY",
+    "KEY_READY",
+    "STAGED",
+    "SWITCHED",
+    "POST_RESTORE_PROTECTED",
+    "RECOVERED_ROLLBACK_RETAINED",
+}
+COMPONENT_KEYS = ("webImage", "backendImage", "mysqlImage")
+
+
+def load_tool(module_name: str, filename: str):
+    loader = importlib.machinery.SourceFileLoader(module_name, str(ROOT / filename))
+    specification = importlib.util.spec_from_loader(loader.name, loader)
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"无法加载 {filename}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+manager = load_tool("copper_recovery_manager", "copper-manage-from-mac")
+installer = load_tool("copper_recovery_installer", "copper-install-from-mac")
+
+
+class RecoveryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Evidence:
+    profile_path: pathlib.Path
+    profile: dict[str, str]
+    stamp: str
+    primary: pathlib.Path
+    secondary: pathlib.Path
+    identity: pathlib.Path
+    archive: pathlib.Path
+    verification_receipt: pathlib.Path
+    uninstall_receipt: pathlib.Path
+    backup_id: str
+    backup_sha256: str
+    verification_sha256: str
+    uninstall_sha256: str
+
+
+def fail(message: str) -> None:
+    raise RecoveryError(message)
+
+
+def private_json(path: pathlib.Path, label: str) -> dict[str, object]:
+    try:
+        return manager.secure_private_json(path, label)
+    except manager.ManagerError as error:
+        raise RecoveryError(str(error)) from error
+
+
+def verify_json_sidecar(path: pathlib.Path, label: str) -> str:
+    sidecar = pathlib.Path(str(path) + ".sha256")
+    if sidecar.is_symlink() or not sidecar.is_file():
+        fail(f"{label}缺少 SHA-256 校验文件：{sidecar}")
+    lines = sidecar.read_text(encoding="ascii").splitlines()
+    digest = manager.sha256_file(path)
+    if lines != [f"{digest}  {path.name}"]:
+        fail(f"{label}与 SHA-256 校验文件不一致")
+    return digest
+
+
+def same_file(left: pathlib.Path, right: pathlib.Path, label: str) -> None:
+    if right.is_symlink() or not right.is_file() or manager.sha256_file(left) != manager.sha256_file(right):
+        fail(f"主位置与第二位置的{label}不一致")
+
+
+def retired_profiles(site_id: str | None) -> list[pathlib.Path]:
+    return manager.retired_profile_paths(site_id)
+
+
+def select_retired(site_id: str | None) -> pathlib.Path:
+    candidates = retired_profiles(site_id)
+    if not candidates:
+        fail("没有找到已彻底移除的站点记录；只有完成过‘备份并彻底移除’的站点才能从这里恢复")
+    if len(candidates) == 1:
+        return candidates[0]
+    labels: list[str] = []
+    for path in candidates:
+        profile = manager.secure_profile(path)
+        labels.append(f"{profile['siteId']} · 原地址 https://{profile['domain']} · {path.stem[-15:]}")
+    return candidates[manager.choose("请选择要恢复的已删除站点", labels) - 1]
+
+
+def profile_key_directory(
+    raw: str,
+    site_id: str,
+    expected_identity: pathlib.Path | None = None,
+) -> pathlib.Path:
+    """Resolve one historical duplicated site suffix without hiding damage.
+
+    Guided installer versions before the site-directory normalization fix could
+    persist ``.../site-id/site-id`` even though the verified key replica lived
+    at ``.../site-id``.  Collapse only that exact repeated suffix and only when
+    the parent replica is bound to the primary identity.  A symlink or a nested
+    replica carrying another identity remains authoritative and is rejected by
+    the normal evidence checks instead of being silently skipped.
+    """
+    configured = pathlib.Path(raw).expanduser()
+    if configured.name == site_id and configured.parent.name == site_id:
+        candidate = configured.parent
+        candidate_identity = candidate / "copper-age-identity.txt"
+        if candidate.is_dir() and not candidate.is_symlink():
+            if expected_identity is None and not configured.exists() and not configured.is_symlink():
+                return candidate.resolve()
+            if (
+                expected_identity is not None
+                and expected_identity.is_file()
+                and not expected_identity.is_symlink()
+                and candidate_identity.is_file()
+                and not candidate_identity.is_symlink()
+                and manager.sha256_file(candidate_identity) == manager.sha256_file(expected_identity)
+            ):
+                configured_identity = configured / "copper-age-identity.txt"
+                if configured.is_symlink() or configured_identity.is_symlink():
+                    return configured.resolve()
+                if (
+                    configured_identity.is_file()
+                    and manager.sha256_file(configured_identity) != manager.sha256_file(expected_identity)
+                ):
+                    return configured.resolve()
+                return candidate.resolve()
+    return configured.resolve()
+
+
+def validate_evidence(profile_path: pathlib.Path) -> Evidence:
+    match = RETIRED_NAME_RE.fullmatch(profile_path.name)
+    if not match:
+        fail("停用站点记录文件名不符合安全规则")
+    site_id, stamp = match.groups()
+    profile = manager.secure_profile(profile_path)
+    if profile["siteId"] != site_id:
+        fail("停用站点记录与文件名中的站点代号不一致")
+    primary = profile_key_directory(profile["primaryKeyDirectory"], site_id)
+    identity = primary / "copper-age-identity.txt"
+    secondary = profile_key_directory(profile["backupKeyDirectory"], site_id, identity)
+    secondary_identity = secondary / "copper-age-identity.txt"
+    for path, label in ((identity, "客户恢复私钥"), (secondary_identity, "第二份客户恢复私钥")):
+        if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
+            fail(f"{label}不存在或权限不安全：{path}")
+    same_file(identity, secondary_identity, "客户恢复私钥")
+
+    uninstall = primary / "uninstall-receipts" / f"{site_id}-{stamp}.json"
+    document = private_json(uninstall, "卸载回执")
+    uninstall_sha = verify_json_sidecar(uninstall, "卸载回执")
+    secondary_uninstall = secondary / "uninstall-receipts" / uninstall.name
+    secondary_uninstall_sidecar = pathlib.Path(str(secondary_uninstall) + ".sha256")
+    same_file(uninstall, secondary_uninstall, "卸载回执")
+    same_file(pathlib.Path(str(uninstall) + ".sha256"), secondary_uninstall_sidecar, "卸载回执校验文件")
+    if (
+        document.get("formatVersion") != manager.REMOVAL_RECEIPT_FORMAT
+        or document.get("status") != "INTERNAL_REHEARSAL_ONLY"
+        or document.get("result") != "PASSED"
+        or document.get("mode") != "BACKUP_THEN_REMOVE"
+        or document.get("siteId") != site_id
+        or document.get("domain") != profile["domain"]
+        or document.get("serverResidueCheck") != "PASSED"
+    ):
+        fail("卸载回执没有证明该站点完成了受控备份、删除和验空")
+    backup = document.get("backup")
+    if not isinstance(backup, dict):
+        fail("卸载回执缺少整站备份证明")
+    filename = str(backup.get("fileName") or "")
+    if not manager.BACKUP_RE.fullmatch(filename) or not filename.startswith(site_id + "_"):
+        fail("卸载回执中的整站备份文件名不安全")
+    archive = (primary / "backups" / filename).resolve()
+    if archive.parent != (primary / "backups").resolve() or archive.is_symlink() or not archive.is_file():
+        fail("卸载回执指定的整站备份不存在于客户恢复目录")
+    manager.verify_sidecar(archive)
+    secondary_archive = secondary / "backups" / filename
+    manager.verify_sidecar_file(secondary_archive, pathlib.Path(str(secondary_archive) + ".sha256"), filename)
+    same_file(archive, secondary_archive, "整站备份")
+    verification_path = pathlib.Path(str(backup.get("verificationReceipt") or "")).expanduser().resolve()
+    if verification_path.parent != (primary / "backups").resolve():
+        fail("卸载回执引用了客户恢复目录之外的离线验证回执")
+    verification = private_json(verification_path, "离线验证回执")
+    secondary_verification = secondary / "backups" / verification_path.name
+    same_file(verification_path, secondary_verification, "离线验证回执")
+    backup_id, backup_sha, verification_sha = manager.receipt_backup_fields(verification_path, archive)
+    if (
+        backup.get("backupId") != backup_id
+        or backup.get("sha256") != backup_sha
+        or backup.get("verificationReceiptSha256") != verification_sha
+        or manager.sha256_file(archive) != backup_sha
+        or verification.get("result") != "PASSED"
+    ):
+        fail("卸载回执、整站备份和离线验证回执没有绑定到同一份数据")
+    return Evidence(
+        profile_path, profile, stamp, primary, secondary, identity, archive,
+        verification_path, uninstall, backup_id, backup_sha, verification_sha, uninstall_sha,
+    )
+
+
+def pending_path(evidence: Evidence) -> pathlib.Path:
+    return evidence.primary / "recovery-receipts" / f".{evidence.profile['siteId']}-pending.json"
+
+
+def write_state(evidence: Evidence, state: dict[str, object]) -> None:
+    state.update(
+        {
+            "formatVersion": RECOVERY_FORMAT,
+            "status": "INTERNAL_REHEARSAL_ONLY",
+            "siteId": evidence.profile["siteId"],
+            "sourceUninstallReceipt": str(evidence.uninstall_receipt),
+            "sourceUninstallReceiptSha256": evidence.uninstall_sha256,
+            "backupId": evidence.backup_id,
+            "backupSha256": evidence.backup_sha256,
+            "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    )
+    manager.write_private_json(pending_path(evidence), state)
+
+
+def load_state(evidence: Evidence) -> dict[str, object] | None:
+    path = pending_path(evidence)
+    if not path.exists() and not path.is_symlink():
+        return None
+    state = private_json(path, "未完成的整站恢复记录")
+    if (
+        state.get("formatVersion") != RECOVERY_FORMAT
+        or state.get("status") != "INTERNAL_REHEARSAL_ONLY"
+        or state.get("siteId") != evidence.profile["siteId"]
+        or state.get("sourceUninstallReceiptSha256") != evidence.uninstall_sha256
+        or state.get("backupId") != evidence.backup_id
+        or state.get("backupSha256") != evidence.backup_sha256
+        or state.get("phase") not in PHASES
+    ):
+        fail("未完成恢复记录与当前卸载回执或整站备份不一致")
+    return state
+
+
+def target_profile_from_state(state: dict[str, object]) -> dict[str, str]:
+    names = ("siteId", "domain", "publicIp", "sshHost", "sshUser", "sshKey")
+    values: dict[str, str] = {}
+    for name in names:
+        value = state.get(name)
+        if not isinstance(value, str) or not value:
+            fail("未完成恢复记录缺少目标服务器信息")
+        values[name] = value
+    values["siteId"] = installer.normalize_site_id(values["siteId"])
+    values["domain"] = installer.normalize_domain(values["domain"])
+    values["publicIp"] = installer.normalize_public_ipv4(values["publicIp"])
+    values["sshHost"] = installer.normalize_ssh_host(values["sshHost"])
+    values["sshUser"] = installer.normalize_ssh_user(values["sshUser"])
+    return values
+
+
+def collect_target(evidence: Evidence) -> dict[str, str]:
+    profile_document = private_json(evidence.profile_path, "停用站点记录")
+    same = manager.choose(
+        "恢复到哪里？",
+        ["恢复到原服务器", "恢复到另一台全新 Ubuntu 服务器"],
+    ) == 1
+    default_ip = str(profile_document.get("publicIp") or evidence.profile["sshHost"])
+    domain = installer.normalize_domain(manager.prompt("恢复后的访问域名", evidence.profile["domain"]))
+    public_ip = installer.normalize_public_ipv4(manager.prompt("目标服务器公网 IPv4", default_ip if same else ""))
+    ssh_host = installer.normalize_ssh_host(manager.prompt("SSH 服务器地址", evidence.profile["sshHost"] if same else public_ip))
+    ssh_user = installer.normalize_ssh_user(manager.prompt("SSH 登录用户名", evidence.profile["sshUser"] if same else "ubuntu"))
+    ssh_key = pathlib.Path(manager.prompt("SSH 私钥文件位置", evidence.profile["sshKey"] if same else "")).expanduser().resolve()
+    if ssh_key.is_symlink() or not ssh_key.is_file() or stat.S_IMODE(ssh_key.stat().st_mode) & 0o077:
+        fail(f"SSH 私钥不存在或权限不安全：{ssh_key}")
+    return {
+        "siteId": evidence.profile["siteId"],
+        "domain": domain,
+        "publicIp": public_ip,
+        "sshHost": ssh_host,
+        "sshUser": ssh_user,
+        "sshKey": str(ssh_key),
+    }
+
+
+def show_plan(evidence: Evidence, target: dict[str, str]) -> None:
+    print("\n从整站备份恢复已删除站点")
+    print("=" * 68)
+    print(f"站点：{evidence.profile['siteId']}")
+    print(f"备份：{evidence.archive.name}")
+    print(f"备份 SHA-256：{evidence.backup_sha256}")
+    print(f"目标服务器：{target['sshUser']}@{target['sshHost']}（{target['publicIp']}）")
+    print(f"恢复后地址：https://{target['domain']}")
+    print("步骤：核对备份版本 -> 安装空白站点 -> 设置临时管理员密码 -> 恢复并确认数据")
+    print("确认数据正确后，程序会自动完成新备份、下载、离线校验、第二位置复制和最终检查。")
+    print("切换前不会修改正式数据；切换后空白站点会保留为回滚点。")
+    print("=" * 68)
+
+
+def install_blank(evidence: Evidence, target: dict[str, str]) -> None:
+    command = [
+        str(ROOT / "copper-install-from-mac"),
+        "--domain", target["domain"],
+        "--public-ip", target["publicIp"],
+        "--site-id", target["siteId"],
+        "--ssh-host", target["sshHost"],
+        "--ssh-user", target["sshUser"],
+        "--ssh-key", target["sshKey"],
+        "--customer-reference", target["siteId"],
+        "--primary-key-root", str(evidence.primary),
+        "--backup-key-root", str(evidence.secondary),
+        "--time-zone", "Asia/Shanghai",
+        "--yes",
+    ]
+    if evidence.primary.stat().st_dev == evidence.secondary.stat().st_dev:
+        command.append("--allow-same-disk-backup")
+    result = subprocess.run(command, check=False)
+    if result.returncode != 0:
+        fail("目标服务器空白安装尚未完成；安装记录和上传进度已保留，重新进入本入口会继续")
+
+
+def active_profile(evidence: Evidence) -> dict[str, str]:
+    path = manager.profile_root() / f"{evidence.profile['siteId']}.json"
+    return manager.secure_profile(path)
+
+
+def copy_backup_to_server(profile: dict[str, str], evidence: Evidence) -> None:
+    remote_dir = f".copper-disaster-recovery/{profile['siteId']}"
+    manager.remote(profile, f"install -d -m 0700 \"$HOME/{remote_dir}\"")
+    for source in (evidence.archive, pathlib.Path(str(evidence.archive) + ".sha256")):
+        subprocess.run(
+            [*manager.scp_base(profile), str(source), f"{profile['sshUser']}@{profile['sshHost']}:{remote_dir}/{source.name}"],
+            check=True,
+        )
+    name = evidence.archive.name
+    remote_source = f'"$HOME/{remote_dir}/{name}"'
+    remote_sidecar = f'"$HOME/{remote_dir}/{name}.sha256"'
+    server_archive = f"/var/backups/copper/{name}"
+    expected = shlex.quote(evidence.backup_sha256)
+    manager.remote(
+        profile,
+        f"if sudo test -e {server_archive}; then\n"
+        f"  test \"$(sudo sha256sum {server_archive} | awk '{{print $1}}')\" = {expected}\n"
+        f"else\n"
+        f"  sudo install -o root -g root -m 0600 {remote_source} {server_archive}\n"
+        f"fi\n"
+        f"if sudo test -e {server_archive}.sha256; then\n"
+        f"  test \"$(sudo cat {server_archive}.sha256)\" = {shlex.quote(evidence.backup_sha256 + '  ' + evidence.archive.name)}\n"
+        f"else\n"
+        f"  sudo install -o root -g root -m 0600 {remote_sidecar} {server_archive}.sha256\n"
+        f"fi\n"
+        f"rm -rf -- \"$HOME/{remote_dir}\"\n"
+        f"sudo copperctl backup verify {server_archive}",
+        tty=True,
+    )
+
+
+def restore_test_recorded(profile: dict[str, str], evidence: Evidence) -> bool:
+    result = manager.remote(
+        profile,
+        "sudo copperctl backup key status",
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        document = json.loads((result.stdout or b"").decode("utf-8"))
+    except json.JSONDecodeError:
+        return False
+    for key in document.get("keys", []) if isinstance(document, dict) else []:
+        if not isinstance(key, dict):
+            continue
+        for test in key.get("restoreTests", []):
+            if (
+                isinstance(test, dict)
+                and test.get("backupId") == evidence.backup_id
+                and test.get("backupSha256") == evidence.backup_sha256
+                and test.get("receiptSha256") == evidence.verification_sha256
+            ):
+                return True
+    return False
+
+
+def medium_components() -> dict[str, str]:
+    components = {
+        "webImage": installer.operator_value(ROOT, "COPPER_WEB_IMAGE"),
+        "backendImage": installer.operator_value(ROOT, "COPPER_BACKEND_IMAGE"),
+        "mysqlImage": installer.operator_value(ROOT, "COPPER_MYSQL_IMAGE"),
+    }
+    for name, value in components.items():
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+            fail(f"当前安装介质缺少可核对的程序版本：{name}")
+    return components
+
+
+def assert_component_compatibility(backup: dict[str, str], medium: dict[str, str]) -> None:
+    differences = [name for name in COMPONENT_KEYS if backup.get(name) != medium.get(name)]
+    if differences:
+        labels = {"webImage": "网页", "backendImage": "后台", "mysqlImage": "数据库"}
+        fail(
+            "这份备份与当前安装介质不是同一套程序，尚未修改目标服务器。"
+            "请改用创建该备份时的安装介质。不同部分："
+            + "、".join(labels[name] for name in differences)
+        )
+
+
+def offline_reverify(evidence: Evidence) -> dict[str, str]:
+    tool = ROOT / "tools" / "copper-key-offline"
+    with tempfile.TemporaryDirectory(prefix="copper-disaster-recovery-") as directory:
+        receipt = pathlib.Path(directory) / "verification.json"
+        subprocess.run(
+            [sys.executable, str(tool), "verify-backup", "--identity", str(evidence.identity),
+             "--archive", str(evidence.archive), "--receipt", str(receipt)],
+            check=True,
+        )
+        document = json.loads(receipt.read_text(encoding="utf-8"))
+        if (
+            document.get("result") != "PASSED"
+            or document.get("backupId") != evidence.backup_id
+            or document.get("backupSha256") != evidence.backup_sha256
+        ):
+            fail("使用客户私钥重新验证后，结果与卸载回执不一致")
+        components = document.get("components")
+        if not isinstance(components, dict):
+            fail("离线验证没有取得备份的程序版本信息")
+        result = {name: str(components.get(name) or "") for name in COMPONENT_KEYS}
+        assert_component_compatibility(result, medium_components())
+        return result
+
+
+def stage_restore(profile: dict[str, str], evidence: Evidence, restore_id: str) -> None:
+    if not manager.RESTORE_ID_RE.fullmatch(restore_id):
+        fail("恢复编号格式不正确")
+    volatile = f"/run/copper-{restore_id}-identity.txt"
+    cleanup = f"sudo rm -f {shlex.quote(volatile)}"
+    manager.remote(profile, "test \"$(findmnt -n -o FSTYPE /run)\" = tmpfs")
+    try:
+        with evidence.identity.open("rb") as reader:
+            manager.remote(
+                profile,
+                f"sudo tee {shlex.quote(volatile)} >/dev/null\n"
+                f"sudo chown root:root {shlex.quote(volatile)}\n"
+                f"sudo chmod 0400 {shlex.quote(volatile)}",
+                input_bytes=reader.read(),
+            )
+        manager.remote(
+            profile,
+            f"trap '{cleanup}' EXIT HUP INT TERM\n"
+            f"sudo copperctl backup restore stage /var/backups/copper/{shlex.quote(evidence.archive.name)} "
+            f"--identity {shlex.quote(volatile)} --restore-id {shlex.quote(restore_id)} --port 18080\n"
+            f"{cleanup}\ntrap - EXIT HUP INT TERM\n"
+            f"sudo copperctl backup restore status {shlex.quote(restore_id)}\n"
+            "curl --fail http://127.0.0.1:18080/readyz\n"
+            f"sudo test ! -e {shlex.quote(volatile)}",
+            tty=True,
+        )
+    finally:
+        manager.remote(profile, cleanup, check=False)
+
+
+def restore_status(profile: dict[str, str], restore_id: str) -> str:
+    result = manager.remote(
+        profile,
+        f"sudo copperctl backup restore status {shlex.quote(restore_id)}",
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return "NOT_FOUND"
+    try:
+        document = json.loads((result.stdout or b"").decode("utf-8"))
+    except json.JSONDecodeError:
+        return "UNKNOWN"
+    return str(document.get("status") or "UNKNOWN")
+
+
+def switch_restore(profile: dict[str, str], restore_id: str) -> None:
+    if manager.choose(
+        "正式切换后，管理员密码会恢复为备份时的密码。是否已经确认自己知道该密码？",
+        ["知道备份时的管理员密码，继续", "暂不切换，保留旁路恢复"],
+    ) != 1:
+        fail("旁路恢复已保留；下次进入本入口可以从切换前继续")
+    print("\n服务器接下来会再次显示影响范围，并要求输入精确的 SWITCH 确认文字。")
+    manager.remote(
+        profile,
+        f"sudo copperctl backup restore switch {shlex.quote(restore_id)}\n"
+        f"sudo copperctl backup restore status {shlex.quote(restore_id)}",
+        tty=True,
+    )
+
+
+def discard_failed_restore(profile: dict[str, str], restore_id: str) -> bool:
+    choice = manager.choose(
+        "上次只在隔离区进行的恢复没有完成",
+        ["清理该隔离区并自动重试（推荐）", "保留现场并退出"],
+    )
+    if choice != 1:
+        return False
+    manager.remote(
+        profile,
+        f"sudo copperctl backup restore discard {shlex.quote(restore_id)} "
+        f"--confirm {shlex.quote('DISCARD ' + restore_id)}",
+        tty=True,
+    )
+    return True
+
+
+def rollback(profile: dict[str, str], evidence: Evidence, state: dict[str, object]) -> None:
+    restore_id = str(state.get("restoreId") or "")
+    print("\n这会恢复切换前的空白站点；从备份恢复出的数据不会直接删除，而会先回到旁路。")
+    manager.remote(
+        profile,
+        f"sudo copperctl backup restore rollback {shlex.quote(restore_id)}\n"
+        f"sudo copperctl backup restore discard {shlex.quote(restore_id)} "
+        f"--confirm {shlex.quote('DISCARD ' + restore_id)}\n"
+        "sudo copperctl monitor check",
+        tty=True,
+    )
+    rollback_stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    rollback_document: dict[str, object] = {
+        "formatVersion": RECOVERY_RECEIPT_FORMAT,
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "result": "ROLLED_BACK",
+        "siteId": profile["siteId"],
+        "domain": profile["domain"],
+        "targetServer": f"{profile['sshUser']}@{profile['sshHost']}",
+        "restoreId": restore_id,
+        "backupId": evidence.backup_id,
+        "backupSha256": evidence.backup_sha256,
+        "sourceUninstallReceiptSha256": evidence.uninstall_sha256,
+        "previousRecoveryReceipt": state.get("recoveryReceipt"),
+        "rolledBackAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    rollback_receipt, rollback_sidecar = manager.write_receipt_copy(
+        evidence.primary / "recovery-receipts" / f"{profile['siteId']}-{rollback_stamp}-rollback.json",
+        rollback_document,
+    )
+    manager.copy_checked(
+        rollback_receipt, evidence.secondary / "recovery-receipts" / rollback_receipt.name
+    )
+    manager.copy_checked(
+        rollback_sidecar, evidence.secondary / "recovery-receipts" / rollback_sidecar.name
+    )
+    state["phase"] = "KEY_READY"
+    state["rolledBackAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    for name in (
+        "restoreId", "stagedAt", "switchedAt", "receiptStamp", "receiptVerifiedAt",
+        "recoveryReceipt", "postRestoreBackupId", "postRestoreBackupSha256",
+        "postRestoreBackupFile", "postRestoreVerificationReceipt",
+        "postRestoreVerificationReceiptSha256", "postRestoreProtectedAt",
+    ):
+        state.pop(name, None)
+    write_state(evidence, state)
+    print("已回到空白站点；整站备份和客户私钥仍在本机，下次可重新恢复。")
+
+
+def write_recovery_receipt(evidence: Evidence, profile: dict[str, str], state: dict[str, object]) -> pathlib.Path:
+    restore_id = str(state["restoreId"])
+    stamp = str(state.get("receiptStamp") or dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    if not re.fullmatch(r"[0-9]{8}-[0-9]{6}", stamp):
+        fail("恢复回执时间标识不正确")
+    if "receiptStamp" not in state:
+        state["receiptStamp"] = stamp
+        state["receiptVerifiedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        write_state(evidence, state)
+    verified_at = state.get("receiptVerifiedAt")
+    if not isinstance(verified_at, str) or not verified_at:
+        fail("恢复回执验证时间缺失")
+    document: dict[str, object] = {
+        "formatVersion": RECOVERY_RECEIPT_FORMAT,
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "result": "PASSED",
+        "siteId": profile["siteId"],
+        "domain": profile["domain"],
+        "targetServer": f"{profile['sshUser']}@{profile['sshHost']}",
+        "restoreId": restore_id,
+        "backupId": evidence.backup_id,
+        "backupSha256": evidence.backup_sha256,
+        "sourceUninstallReceiptSha256": evidence.uninstall_sha256,
+        "switchedAt": state.get("switchedAt"),
+        "verifiedAt": verified_at,
+        "rollbackPoint": "RETAINED",
+        "postRestoreBackup": {
+            "backupId": state.get("postRestoreBackupId"),
+            "fileName": state.get("postRestoreBackupFile"),
+            "sha256": state.get("postRestoreBackupSha256"),
+            "verificationReceipt": state.get("postRestoreVerificationReceipt"),
+            "verificationReceiptSha256": state.get("postRestoreVerificationReceiptSha256"),
+            "secondLocationVerified": True,
+            "dailyScheduleInstalled": True,
+        },
+    }
+    receipt, sidecar = manager.write_receipt_copy(
+        evidence.primary / "recovery-receipts" / f"{profile['siteId']}-{stamp}.json",
+        document,
+    )
+    manager.copy_checked(receipt, evidence.secondary / "recovery-receipts" / receipt.name)
+    manager.copy_checked(sidecar, evidence.secondary / "recovery-receipts" / sidecar.name)
+    return receipt
+
+
+def handle_switched(evidence: Evidence, profile: dict[str, str], state: dict[str, object]) -> int:
+    if state.get("phase") == "SWITCHED":
+        choice = manager.choose(
+            "备份数据已经切换为当前站点",
+            ["我已登录并核对关键数据，自动完成全部收尾", "回滚到切换前的空白站点", "暂时保留现场并退出"],
+        )
+        if choice == 2:
+            rollback(profile, evidence, state)
+            return 0
+        if choice == 3:
+            print("恢复数据和回滚点都已保留；下次进入本入口会继续提示。")
+            return 0
+        print("\n正在自动完成恢复后的数据保护；期间无需再复制命令。")
+        protected = manager.create_download_verify(
+            profile, evidence.primary, evidence.secondary, ROOT
+        )
+        backup_id, backup_sha, receipt_sha = manager.receipt_backup_fields(
+            protected.verification_receipt, protected.archive
+        )
+        state.update(
+            {
+                "phase": "POST_RESTORE_PROTECTED",
+                "postRestoreBackupId": backup_id,
+                "postRestoreBackupSha256": backup_sha,
+                "postRestoreBackupFile": protected.archive.name,
+                "postRestoreVerificationReceipt": protected.verification_receipt.name,
+                "postRestoreVerificationReceiptSha256": receipt_sha,
+                "postRestoreProtectedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
+        )
+        write_state(evidence, state)
+    manager.remote(profile, "sudo copperctl doctor\nsudo copperctl monitor check", tty=True)
+    receipt = write_recovery_receipt(evidence, profile, state)
+    state["phase"] = "RECOVERED_ROLLBACK_RETAINED"
+    state["recoveryReceipt"] = str(receipt)
+    write_state(evidence, state)
+    print("\n整站恢复完成。")
+    print(f"恢复回执：{receipt}")
+    print("切换前空白站点仍作为回滚点保留；不会在未再次确认时自动删除。")
+    return 0
+
+
+def run(evidence: Evidence, state: dict[str, object]) -> int:
+    target = target_profile_from_state(state)
+    phase = str(state["phase"])
+    if phase == "RECOVERED_ROLLBACK_RETAINED":
+        profile = active_profile(evidence)
+        choice = manager.choose(
+            "该站点已完成恢复并保留了回滚点",
+            ["检查当前站点", "回滚到恢复前的空白站点", "退出"],
+        )
+        if choice == 1:
+            manager.show_status(profile)
+        elif choice == 2:
+            rollback(profile, evidence, state)
+        return 0
+    if phase == "SELECTED":
+        backup_components = offline_reverify(evidence)
+        current_components = medium_components()
+        state["backupComponents"] = backup_components
+        state["mediumComponents"] = current_components
+        write_state(evidence, state)
+        install_blank(evidence, target)
+        state["phase"] = "INSTALLED"
+        state["installedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        write_state(evidence, state)
+        phase = "INSTALLED"
+    profile = active_profile(evidence)
+    if phase == "INSTALLED":
+        print("\n请先完成空白站点的首次管理员登录和改密。")
+        print("这是切换前的临时安全入口；正式切换后仍使用备份时的原管理员密码。")
+        manager.administrator(profile)
+        state["phase"] = "ADMIN_READY"
+        write_state(evidence, state)
+        phase = "ADMIN_READY"
+    if phase == "ADMIN_READY":
+        if not isinstance(state.get("backupComponents"), dict):
+            state["backupComponents"] = offline_reverify(evidence)
+            state["mediumComponents"] = medium_components()
+            write_state(evidence, state)
+        manager.register_key(profile, evidence.primary)
+        copy_backup_to_server(profile, evidence)
+        if restore_test_recorded(profile, evidence):
+            print("该整站备份的客户离线验证回执已经登记，本次不会重复登记。")
+        else:
+            manager.offline_verify_and_record(
+                profile, evidence.primary, evidence.secondary, ROOT, evidence.archive, monitor=False
+            )
+        state["phase"] = "KEY_READY"
+        write_state(evidence, state)
+        phase = "KEY_READY"
+    restore_id = str(state.get("restoreId") or "")
+    if phase == "KEY_READY":
+        if not restore_id:
+            restore_id = "operator-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            state["restoreId"] = restore_id
+            write_state(evidence, state)
+        existing_status = restore_status(profile, restore_id)
+        if existing_status == "NOT_FOUND":
+            stage_restore(profile, evidence, restore_id)
+            existing_status = "VALIDATED"
+        elif existing_status == "FAILED":
+            if not discard_failed_restore(profile, restore_id):
+                fail("失败的隔离恢复已保留；正式站点没有改变")
+            stage_restore(profile, evidence, restore_id)
+            existing_status = "VALIDATED"
+        if existing_status == "VALIDATED":
+            state["phase"] = "STAGED"
+            state["stagedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            write_state(evidence, state)
+            phase = "STAGED"
+        elif existing_status == "SWITCHED":
+            state["phase"] = "SWITCHED"
+            state["switchedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            write_state(evidence, state)
+            phase = "SWITCHED"
+        else:
+            fail(f"上次旁路恢复当前状态为 {existing_status}，拒绝新建或覆盖；现场已保留")
+    if phase == "STAGED":
+        status = restore_status(profile, restore_id)
+        if status == "SWITCHED":
+            state["phase"] = "SWITCHED"
+            state["switchedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            write_state(evidence, state)
+        elif status != "VALIDATED":
+            fail(f"旁路恢复当前状态为 {status}，拒绝自动切换；现场和检查点已保留")
+        else:
+            switch_restore(profile, restore_id)
+            state["phase"] = "SWITCHED"
+            state["switchedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            write_state(evidence, state)
+    return handle_switched(evidence, profile, state)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="从受控卸载备份恢复完整 Copper 站点")
+    parser.add_argument("--site-id")
+    args = parser.parse_args(argv)
+    if sys.platform != "darwin":
+        fail("本入口当前只支持保存客户恢复私钥的 Mac")
+    print("Copper 整站灾难恢复（INTERNAL_REHEARSAL_ONLY）")
+    installer.require_local_tools(True)
+    installer.verify_local_media(ROOT)
+    requested_site = installer.normalize_site_id(args.site_id) if args.site_id else None
+    profile_path = select_retired(requested_site)
+    evidence = validate_evidence(profile_path)
+    state = load_state(evidence)
+    if state is None:
+        target = collect_target(evidence)
+        show_plan(evidence, target)
+        expected = f"RECOVER {evidence.profile['siteId']}"
+        print("请完整输入下面双引号内的确认文字；双引号本身不用输入：")
+        print(f'"{expected}"')
+        if input("确认文字：").strip() != expected:
+            fail("确认文字不一致；服务器和备份均未改变")
+        state = {**target, "phase": "SELECTED", "createdAt": dt.datetime.now(dt.timezone.utc).isoformat()}
+        write_state(evidence, state)
+    else:
+        target = target_profile_from_state(state)
+        print("\n发现上次未完成或仍保留回滚点的整站恢复：")
+        print(f"  站点：{evidence.profile['siteId']}")
+        print(f"  目标：{target['sshUser']}@{target['sshHost']} · https://{target['domain']}")
+        print(f"  当前步骤：{state['phase']}")
+        if manager.choose("是否继续？", ["继续上次恢复", "保留现场并退出"]) != 1:
+            return 0
+    return run(evidence, state)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\n恢复已暂停；检查点、备份、私钥和服务器现场均已保留。", file=sys.stderr)
+        raise SystemExit(130)
+    except (
+        RecoveryError,
+        manager.ManagerError,
+        installer.LocalInstallError,
+        OSError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ) as error:
+        print(f"\n恢复已停止：{error}", file=sys.stderr)
+        print("备份、客户私钥、检查点和已完成步骤均不会被覆盖；修正提示后重新进入即可继续。", file=sys.stderr)
+        raise SystemExit(3)

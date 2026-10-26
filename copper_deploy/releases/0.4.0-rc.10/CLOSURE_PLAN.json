@@ -1,0 +1,55 @@
+{
+  "format": "copper-release-closure-plan/v1",
+  "recordType": "EXECUTION_PLAN_20261025",
+  "version": "0.4.0-rc.10",
+  "scope": "INTERNAL_REHEARSAL_ONLY",
+  "status": "BOUNDED_OL9_PATCHES_AND_SHELL_CACHE_CLEANUP_REQUIRE_NEW_BUILD_AND_SCAN",
+  "requiredHost": "Ubuntu Server 24.04 LTS x86_64; Docker Engine 29.x with containerd image store; Compose Plugin 5.x",
+  "rc7FreezeUnchanged": true,
+  "candidateRightsEngineering": "NEW_SBOM_LICENSE_NOTICE_RECONCILIATION_REQUIRED",
+  "directUpgradeSources": [],
+  "ownerDeferredNonblocking": [
+    "browser_and_mobile",
+    "external_legal_and_accounting_review",
+    "external_contract_signatures",
+    "independent_non_developer_install_sample",
+    "customer_key_witness_and_signed_handover",
+    "github_support_platform_history_and_anonymous_public_reproduction"
+  ],
+  "publicReleaseAuthorized": false,
+  "customerProductionDeploymentAuthorized": false,
+  "authorizedHost": "18.142.134.26; user-authorized 2026-10-25",
+  "resultAuthority": "Actual stage artifacts, exact source/image hashes, timestamps and checkpoint/acceptance reports; this plan is not a pass/fail receipt.",
+  "requiredEvidence": [
+    "actual-image-build-and-import-identities",
+    "current-security-scan-and-six-sboms",
+    "license-and-notice-engineering-materials",
+    "offline-guided-medium",
+    "compose-install-full-and-incremental-backup-stage-switch-continuity",
+    "exact-five-docker-debs-buildinfo-and-rights-materials",
+    "actual-oci-no-unowned-mysql-shell-or-certifi-residue",
+    "restored-site-new-full-independent-decryption-and-stage-validation",
+    "docker29-offline-three-image-digest-reference-export-and-import-identity-verification",
+    "bounded-ordinary-ol9-11-package-transaction-native-version-minimums",
+    "unchanged-all-mysql-rpm-identities-and-core-elf-sha256",
+    "current-15-ordinary-high-remediation-and-5-fips-stream-identity-review"
+  ],
+  "priorCandidate": {
+    "version": "0.4.0-rc.9",
+    "status": "SECURITY_PASSED_OFFLINE_EXPORT_FAILED_WITH_UNOWNED_CACHE_RESIDUE",
+    "immutableFreezeCommit": "1d4731a2e8375fa182b4b9dea3b648186b8c8156",
+    "reusedAsPassingEvidence": false
+  },
+  "securityPolicy": "Current configured Critical gate remains enforced; no severity downgrade or unreviewed exceptions.",
+  "scopeReferences": [
+    "docs/RELEASE_SCOPE_20261016.md",
+    "docs/RC9_SECURITY_REMEDIATION.md",
+    "docs/RC10_RELEASE_CLOSURE.md"
+  ],
+  "offlineDockerManifest": {
+    "file": "docker-ubuntu-amd64.env",
+    "sha256": "612eee8b6fe952768be5de6a1b7ff2f226ed82bf3b8ef34d4f8be836d17df01d",
+    "versionAuthority": "Docker official authenticated APT index and exact package SHA; actual binary metadata/host validation retained independently"
+  },
+  "rc9FreezeUnchanged": true
+}

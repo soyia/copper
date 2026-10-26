@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+outputs/
+
+# Vite / TypeScript cache
+.vite/
+*.tsbuildinfo
+vite.config.*.timestamp-*
+vite.config.*.mjs
+
+# Python cache (catalog sync helper)
+__pycache__/
+*.py[cod]
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Editor and OS files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# Deployment tool state
+.vercel/
+.netlify/

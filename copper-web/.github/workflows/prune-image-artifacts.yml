@@ -1,0 +1,32 @@
+name: Prune Web Actions image artifacts daily
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: prune-web-actions-image-artifacts
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Keep only two successful Web image builds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out reviewed cleanup policy
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Remove expired Web image archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPPER_IMAGE_ARTIFACT_PREFIX: copper-web-
+          COPPER_IMAGE_WORKFLOW_FILE: publish-m1-image.yml
+          COPPER_KEEP_SUCCESSFUL_VERSIONS: "2"
+          COPPER_CURRENT_BUILD_SUCCESSFUL: "false"
+          COPPER_INCLUDE_CURRENT_RUN: "false"
+        run: bash scripts/ci/prune-actions-image-artifacts.sh

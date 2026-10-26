@@ -1,0 +1,204 @@
+name: ${COPPER_PROJECT_NAME:-copper}
+
+x-logging: &copper-logging
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "5"
+
+services:
+  mysql:
+    image: ${COPPER_MYSQL_IMAGE:?COPPER_MYSQL_IMAGE must be the immutable Copper MySQL release image with mysqlbinlog}
+    restart: unless-stopped
+    entrypoint:
+      - /usr/bin/bash
+      - /opt/copper/mysql-entrypoint.sh
+    environment:
+      MYSQL_DATABASE: copper_v2
+      MYSQL_USER: copper
+      MYSQL_PASSWORD_FILE: /run/secrets/copper_db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      TZ: ${COPPER_TIME_ZONE:-Asia/Shanghai}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+08:00
+      # copper-backup/v2 uses row-based binary logs between verified weekly
+      # full-site bases. The deployment layer copies closed logs into encrypted
+      # incremental packages and restores the complete database/attachment chain.
+      - --log-bin=/var/lib/mysql/binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --binlog-expire-logs-seconds=2592000
+      - --general-log=OFF
+      - --slow-query-log=OFF
+    secrets:
+      - copper_db_password
+      - mysql_root_password
+    volumes:
+      - type: bind
+        source: ./scripts/mysql-entrypoint.sh
+        target: /opt/copper/mysql-entrypoint.sh
+        read_only: true
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/mysql
+        target: /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "--host=127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - data
+    logging: *copper-logging
+
+  backend:
+    image: ${COPPER_BACKEND_IMAGE:?COPPER_BACKEND_IMAGE must be an immutable release image}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+        restart: true
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      COPPER_PORT: "8191"
+      COPPER_TIME_ZONE: ${COPPER_TIME_ZONE:-Asia/Shanghai}
+      COPPER_DB_URL: jdbc:mysql://mysql:3306/copper_v2?useSSL=false&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      COPPER_DB_USERNAME: copper
+      COPPER_DB_PASSWORD_FILE: /run/secrets/copper_db_password
+      COPPER_FLYWAY_ENABLED: "true"
+      COPPER_FLYWAY_BASELINE_ON_MIGRATE: "false"
+      COPPER_DATA_ROOT: /app/data
+      COPPER_FILE_STORAGE_PATH: /app/data/files
+      COPPER_UPLOAD_TEMP_PATH: /app/data/tmp
+      COPPER_STORAGE_CAPACITY_FILE: /app/data/runtime/storage-capacity.json
+      COPPER_TIME_SAFETY_FILE: /run/copper/time-safety/time-safety.json
+      COPPER_LOG_FILE: /app/data/logs/copper-backend.log
+      COPPER_LOG_LEVEL: ${COPPER_LOG_LEVEL:-INFO}
+      LOGGING_LOGBACK_ROLLINGPOLICY_MAX_FILE_SIZE: 20MB
+      LOGGING_LOGBACK_ROLLINGPOLICY_MAX_HISTORY: "7"
+      LOGGING_LOGBACK_ROLLINGPOLICY_TOTAL_SIZE_CAP: 200MB
+      LOGGING_LOGBACK_ROLLINGPOLICY_CLEAN_HISTORY_ON_START: "true"
+      COPPER_BOOTSTRAP_USERNAME: ${COPPER_BOOTSTRAP_USERNAME:-admin}
+      COPPER_BOOTSTRAP_CREDENTIAL_FILE: /app/data/secrets/initial-admin.txt
+      COPPER_ALLOWED_ORIGINS: https://${COPPER_DOMAIN:?COPPER_DOMAIN is required}
+      COPPER_COOKIE_SECURE: "true"
+      COPPER_COOKIE_SAME_SITE: Strict
+      # Optional privately managed engine. Manual intake remains available by default.
+      COPPER_OCR_ENABLED: ${COPPER_OCR_ENABLED:-false}
+      COPPER_OCR_ENDPOINT: ${COPPER_OCR_ENDPOINT:-http://copper-ocr:8080/ocr}
+      COPPER_OCR_ENGINE: ${COPPER_OCR_ENGINE:-PADDLEOCR_LOCAL}
+      COPPER_OCR_MODEL: ${COPPER_OCR_MODEL:-PP-OCRv6-medium}
+      COPPER_OCR_TIMEOUT_SECONDS: ${COPPER_OCR_TIMEOUT_SECONDS:-120}
+    secrets:
+      - copper_db_password
+    volumes:
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/backend
+        target: /app/data
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/files
+        target: /app/data/files
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/logs
+        target: /app/data/logs
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/time-safety
+        target: /run/copper/time-safety
+        read_only: true
+      - type: bind
+        source: ${COPPER_ETC_DIR:-/etc/copper}/credentials
+        target: /app/data/secrets
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/backups
+        target: /app/data/backups
+    tmpfs:
+      - /app/data/tmp:uid=10001,gid=10001,mode=0700
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8191/api/actuator/health/readiness | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+    stop_grace_period: 30s
+    networks:
+      - data
+    logging: *copper-logging
+
+  web:
+    image: ${COPPER_WEB_IMAGE:?COPPER_WEB_IMAGE must be an immutable release image}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+    environment:
+      COPPER_SITE_ADDRESS: ${COPPER_DOMAIN:?COPPER_DOMAIN is required}
+      COPPER_BACKEND_URL: http://backend:8191
+    ports:
+      - name: http
+        target: 80
+        published: "80"
+        protocol: tcp
+        mode: host
+      - name: https
+        target: 443
+        published: "443"
+        protocol: tcp
+        mode: host
+      - name: https-udp
+        target: 443
+        published: "443"
+        protocol: udp
+        mode: host
+    volumes:
+      - type: bind
+        source: ./config/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ./config/Caddyfile.common
+        target: /etc/caddy/Caddyfile.common
+        read_only: true
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/caddy/data
+        target: /data
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/caddy/config
+        target: /config
+    read_only: true
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    networks:
+      - edge
+      - data
+    logging: *copper-logging
+
+networks:
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    internal: true
+
+secrets:
+  copper_db_password:
+    file: ${COPPER_ETC_DIR:-/etc/copper}/secrets/copper_db_password
+  mysql_root_password:
+    file: ${COPPER_ETC_DIR:-/etc/copper}/secrets/mysql_root_password

@@ -1,0 +1,13 @@
+{
+  "format": "copper-confidentiality-baseline/v1",
+  "recordedAt": "2026-07-16",
+  "owner": "M6-02 / soyia/copper_web#59",
+  "status": "ordinary-github-refs-clean-platform-pr-refs-pending",
+  "rationale": "After the authorized three-repository single-root reset and removal of ordinary branches, tags and Releases, fresh GitHub main clones have no findings. This empty baseline intentionally grants no exemption: every finding in future PR source is new and blocking. GitHub-managed pull-request refs are audited separately and remain a platform-remediation blocker.",
+  "repositoryHeads": {
+    "copper_web": "fbb518c28089b92bd00353263bfc5dd011a274cb",
+    "copper_backend": "6820b13c33a1827efc7c85ff796e1d1574e67b6e",
+    "copper_deploy": "12def1fe13e749c9f10d130260cb493ab7b845fe"
+  },
+  "knownFindingIds": []
+}

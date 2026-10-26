@@ -1,0 +1,57 @@
+name: Verify Deploy M6 confidentiality gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-deploy-m6-confidentiality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit current tree and complete reachable history
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete reviewed history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          # Exclude GitHub's synthetic PR merge commit from the delivered-source audit.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Run fail-closed confidentiality audit
+        run: |
+          set -Eeuo pipefail
+          node scripts/security/audit-repositories.mjs \
+            --repo copper_deploy=. \
+            --config config/m6-confidentiality-audit.json \
+            --gate strict \
+            --scope all \
+            --report "$RUNNER_TEMP/copper-deploy-confidentiality-audit.json"
+
+      - name: Record audit evidence digest in the durable job log
+        run: |
+          set -Eeuo pipefail
+          digest="$(sha256sum "$RUNNER_TEMP/copper-deploy-confidentiality-audit.json" | awk '{print $1}')"
+          printf 'Confidentiality audit: PASS\nReport SHA-256: `%s`\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload redacted audit evidence
+        if: always()
+        # Artifact quota is an external retention problem.  The preceding audit
+        # remains fail-closed; only its optional duplicate attachment may fail.
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: copper-deploy-confidentiality-audit-${{ github.sha }}
+          path: ${{ runner.temp }}/copper-deploy-confidentiality-audit.json
+          if-no-files-found: error
+          retention-days: 14

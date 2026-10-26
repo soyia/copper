@@ -1,0 +1,49 @@
+services:
+  cloudflared:
+    image: ${COPPER_CLOUDFLARED_IMAGE:?COPPER_CLOUDFLARED_IMAGE must be an immutable cloudflared image digest}
+    # Docker Compose file-backed secrets preserve the host root:root 0600
+    # ownership. Run as container root only so cloudflared can read that one
+    # secret; all capabilities are dropped and no host socket/data is mounted.
+    user: "0:0"
+    profiles:
+      - remote-access-cloudflare
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+        restart: true
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --metrics
+      - 0.0.0.0:20241
+      - run
+      - --token-file
+      - /run/secrets/cloudflare_tunnel_token
+    secrets:
+      - cloudflare_tunnel_token
+    ports:
+      - name: cloudflared-metrics
+        target: 20241
+        published: ${COPPER_CLOUDFLARE_METRICS_PORT:-20241}
+        host_ip: 127.0.0.1
+        protocol: tcp
+    read_only: true
+    tmpfs:
+      - /tmp:uid=0,gid=0,mode=0700
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+
+secrets:
+  cloudflare_tunnel_token:
+    file: ${COPPER_CLOUDFLARE_TOKEN_FILE:?COPPER_CLOUDFLARE_TOKEN_FILE is required}

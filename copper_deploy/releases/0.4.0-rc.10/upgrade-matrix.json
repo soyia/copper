@@ -1,0 +1,7 @@
+{
+  "format": "copper-upgrade-matrix/v1",
+  "freshInstallOnly": true,
+  "sources": [],
+  "targetSchema": "68",
+  "targetVersion": "0.4.0-rc.10"
+}

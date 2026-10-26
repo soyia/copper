@@ -1,0 +1,53 @@
+{
+  "format": "copper-release-closure-plan/v1",
+  "recordType": "EXECUTION_PLAN_20261025",
+  "version": "0.4.0-rc.11",
+  "scope": "INTERNAL_REHEARSAL_ONLY",
+  "status": "CHECKSUM_READER_COMPATIBILITY_FIX_REQUIRES_NEW_BUILD_AND_REAL_RESTORE",
+  "requiredHost": "Ubuntu Server 24.04 LTS x86_64; Docker Engine 29.x with containerd image store; Compose Plugin 5.x",
+  "rc7FreezeUnchanged": true,
+  "candidateRightsEngineering": "NEW_SBOM_LICENSE_NOTICE_RECONCILIATION_REQUIRED",
+  "directUpgradeSources": [],
+  "ownerDeferredNonblocking": [
+    "browser_and_mobile",
+    "external_legal_and_accounting_review",
+    "external_contract_signatures",
+    "independent_non_developer_install_sample",
+    "customer_key_witness_and_signed_handover",
+    "github_support_platform_history_and_anonymous_public_reproduction"
+  ],
+  "publicReleaseAuthorized": false,
+  "customerProductionDeploymentAuthorized": false,
+  "authorizedHost": "18.142.134.26; user-authorized 2026-10-25",
+  "resultAuthority": "Actual stage artifacts, exact source/image hashes, timestamps and checkpoint/acceptance reports; this plan is not a pass/fail receipt.",
+  "requiredEvidence": [
+    "new-real-three-image-build-and-import-identities",
+    "new-m4-security-scan-and-six-sboms",
+    "current-license-notice-materials-rebound-to-new-images",
+    "fresh-install-only-guided-medium",
+    "producer-dot-slash-checksum-reader-full-and-incremental-contract",
+    "actual-full-incremental-stage-switch-business-continuity",
+    "restored-site-new-full-independent-decryption-and-new-stage",
+    "untouched-rc10-failure-backups-and-business-baseline",
+    "exact-five-docker-debs-and-original-rights-materials"
+  ],
+  "priorCandidate": {
+    "version": "0.4.0-rc.10",
+    "status": "M4_AND_MEDIUM_PASSED_RESTORE_STAGE_FAILED_BEFORE_DATABASE_APPLY",
+    "immutableFreezeCommit": "f0ba8cc5b7660ff0a8dae88db641f433f0f0628b",
+    "reusedAsPassingEvidence": false
+  },
+  "securityPolicy": "Current configured security gates remain enforced; no severity downgrade or unreviewed exceptions.",
+  "scopeReferences": [
+    "docs/RELEASE_SCOPE_20261016.md",
+    "releases/0.4.0-rc.11/RELEASE_NOTES.md"
+  ],
+  "offlineDockerManifest": {
+    "file": "docker-ubuntu-amd64.env",
+    "sha256": "612eee8b6fe952768be5de6a1b7ff2f226ed82bf3b8ef34d4f8be836d17df01d",
+    "versionAuthority": "Docker official authenticated APT index and exact package SHA; actual binary metadata/host validation retained independently"
+  },
+  "rc9FreezeUnchanged": true,
+  "rc10FreezeUnchanged": true,
+  "freshInstallOnly": true
+}

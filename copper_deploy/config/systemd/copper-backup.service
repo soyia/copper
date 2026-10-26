@@ -1,0 +1,17 @@
+[Unit]
+Description=Copper consistent encrypted full or incremental site backup
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/copper/copper.env
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/copperctl backup create --purpose scheduled
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+TimeoutStartSec=2h
+PrivateTmp=true
+NoNewPrivileges=true
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200

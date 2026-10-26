@@ -1,0 +1,19 @@
+{
+  "format": "copper-final-readonly-operational-audit/v1",
+  "recordedAt": "2026-10-26T00:17:04.604379+00:00",
+  "source": "actual SSH command session 5565 stdout, independently executed after evidence export",
+  "host": "18.142.134.26",
+  "hostListeningPorts": [
+    22,
+    53,
+    80,
+    443
+  ],
+  "privateDockerBackendMysqlHostPortsUnbound": true,
+  "latestBackupRollbackAndRc10ColdPreservationPresent": true,
+  "mediumExportMode": "0600",
+  "mediumExportBytes": 980961418,
+  "mediumExportSha256": "e8f2407121fef052523240b5418dcafa665650d2517637fb346cce0b1860ecd3",
+  "dockerHydratedArchiveSha256": "6d76286654811c0a8558e04bb178766898208cdb79a00d7e1858eb775f878af8",
+  "dockerHydrationDoesNotClaimOriginalArchiveByteIdentity": true
+}

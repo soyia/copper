@@ -1,0 +1,48 @@
+{
+  "format": "copper-security-exceptions/v1",
+  "releaseVersion": "0.3.0-rc.1",
+  "exceptions": [
+    {
+      "vulnerabilityId": "CVE-2025-68121",
+      "artifactRole": "image-mysql",
+      "packageName": "stdlib",
+      "installedVersion": "go1.24.6",
+      "severity": "Critical",
+      "disposition": "RISK_ACCEPTED",
+      "owner": "soyia/product-security",
+      "reason": "The finding is confined to the gosu helper embedded by the fixed official MySQL 8.4.10 image. govulncheck v1.6.0 reported 41 module/package-level finding objects and zero function-symbol traces; GO-2026-4337 appeared only at module level. This supports only a short RC exception, not a no-risk conclusion.",
+      "compensatingControl": "MySQL has no public port; gosu runs once only to drop root before exec of MySQL; RC acceptance expires within seven days and stable publication remains blocked pending an official rebuilt image or renewed analysis.",
+      "evidenceFile": "govulncheck-gosu.json.gz",
+      "evidenceSha256": "69519bbae8554e9f154e637c6e1f6bc2757b5253eca941234322ee62ebef0b88",
+      "expiresAt": "2026-07-21T12:00:00Z"
+    },
+    {
+      "vulnerabilityId": "CVE-2026-27143",
+      "artifactRole": "image-mysql",
+      "packageName": "stdlib",
+      "installedVersion": "go1.24.6",
+      "severity": "Critical",
+      "disposition": "RISK_ACCEPTED",
+      "owner": "soyia/product-security",
+      "reason": "The finding is confined to the gosu helper embedded by the fixed official MySQL 8.4.10 image. govulncheck v1.6.0 reported 41 module/package-level finding objects and zero function-symbol traces; GO-2026-4337 appeared only at module level. This supports only a short RC exception, not a no-risk conclusion.",
+      "compensatingControl": "MySQL has no public port; gosu runs once only to drop root before exec of MySQL; RC acceptance expires within seven days and stable publication remains blocked pending an official rebuilt image or renewed analysis.",
+      "evidenceFile": "govulncheck-gosu.json.gz",
+      "evidenceSha256": "69519bbae8554e9f154e637c6e1f6bc2757b5253eca941234322ee62ebef0b88",
+      "expiresAt": "2026-07-21T12:00:00Z"
+    },
+    {
+      "vulnerabilityId": "GO-2026-4337",
+      "artifactRole": "image-mysql",
+      "packageName": "stdlib",
+      "installedVersion": "go1.24.6",
+      "severity": "Critical",
+      "disposition": "RISK_ACCEPTED",
+      "owner": "soyia/product-security",
+      "reason": "The finding is confined to the gosu helper embedded by the fixed official MySQL 8.4.10 image. govulncheck v1.6.0 reported 41 module/package-level finding objects and zero function-symbol traces; GO-2026-4337 appeared only at module level. This supports only a short RC exception, not a no-risk conclusion.",
+      "compensatingControl": "MySQL has no public port; gosu runs once only to drop root before exec of MySQL; RC acceptance expires within seven days and stable publication remains blocked pending an official rebuilt image or renewed analysis.",
+      "evidenceFile": "govulncheck-gosu.json.gz",
+      "evidenceSha256": "69519bbae8554e9f154e637c6e1f6bc2757b5253eca941234322ee62ebef0b88",
+      "expiresAt": "2026-07-21T12:00:00Z"
+    }
+  ]
+}

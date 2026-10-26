@@ -1,0 +1,50 @@
+{
+  "format": "copper-release-closeout-preparation/v1",
+  "date": "2026-10-16",
+  "status": "PREPARATION_PASS_RUNTIME_PENDING",
+  "nextCandidate": "0.4.0-rc.8",
+  "changes": [
+    "web_imported_manual_in_docker_context",
+    "optional_ocr_disabled_until_explicit_private_network",
+    "restore_project_and_path_environment_isolation",
+    "real_local_build_and_import_identity_binding",
+    "closed_guided_medium_bridge",
+    "explicit_rc_fresh_install_only_no_unverified_upgrade"
+  ],
+  "checks": {
+    "deployPythonTests": 336,
+    "deployPythonFailures": 0,
+    "deployPythonErrors": 0,
+    "deployPythonSkips": 0,
+    "staticContract": "PASS",
+    "m3VersionPolicy": "PASS",
+    "remoteAccessContract": "PASS",
+    "currentDeployConfidentialityAudit": "PASS_ZERO_FINDINGS_ZERO_EXCEPTIONS",
+    "verifiedDockerBundle": "PASS_5_DEBS_MANIFEST_CHECKSUMS",
+    "verifiedAcmeArchive": "PASS",
+    "nativeOcrLive": "PASS"
+  },
+  "actualDockerUsed": false,
+  "productionDeploymentPerformed": false,
+  "publicReleaseCreated": false,
+  "rc7FrozenBytesUnchanged": true,
+  "waitingForStandardX86Host": [
+    "actual_amd64_images",
+    "current_six_role_sbom_security_and_license_engineering_bundle",
+    "complete_current_image_installation_medium",
+    "compose_install_business_backup_restore_and_continuity_acceptance"
+  ],
+  "ownerDeferredNonblocking": [
+    "browser_and_mobile",
+    "external_legal_and_accounting_review",
+    "external_contract_signatures",
+    "independent_non_developer_install_sample",
+    "customer_key_witness_and_signed_handover",
+    "github_support_platform_history_and_anonymous_public_reproduction"
+  ],
+  "notes": [
+    "Local test fixture security/rights bundles are synthetic contracts, not actual rc.8 security/rights deliverables.",
+    "No current components.env or image digest is fabricated.",
+    "Preconfigured acceptance hosts are unavailable; cloud credential permissions are insufficient for provisioning."
+  ]
+}

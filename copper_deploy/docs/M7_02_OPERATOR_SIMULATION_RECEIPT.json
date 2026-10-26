@@ -1,0 +1,54 @@
+{
+  "checks": {
+    "browserAutomationStarted": false,
+    "containerRuntimeTouched": false,
+    "dnsChangeInPlace": true,
+    "dnsRetryInPlace": true,
+    "failureCleanupExercised": true,
+    "formalBackendPortTouched": false,
+    "oneTimeSecretResidualZero": true,
+    "ownedListenerResidualZero": true,
+    "ownedProcessResidualZero": true,
+    "sshUsernamePrompt": true,
+    "temporaryProfileResidualZero": true
+  },
+  "finishedAt": "2026-07-21T01:23:01Z",
+  "formalIndependentCustomerClaimAllowed": false,
+  "formatVersion": "copper-m7-02-operator-simulation/v1",
+  "humanActionRequired": false,
+  "installerVersion": "0.4.4",
+  "internalMilestoneUseAllowed": true,
+  "operatorFlow": {
+    "changedValues": {
+      "domain": "new.example.org",
+      "publicIp": "18.142.134.27",
+      "sshHost": "18.142.134.27"
+    },
+    "dnsAttempts": [
+      [
+        "old.example.org",
+        "18.142.134.26"
+      ],
+      [
+        "old.example.org",
+        "18.142.134.26"
+      ],
+      [
+        "new.example.org",
+        "18.142.134.27"
+      ]
+    ],
+    "dnsResult": {
+      "ipv4": [
+        "18.142.134.27"
+      ],
+      "ipv6": []
+    },
+    "selectedSshUser": "ec2-user",
+    "sshPrompt": "服务器登录用户名 [ubuntu]"
+  },
+  "result": "PASSED",
+  "runId": "copper-m7-02-sim-47b564e19825",
+  "sampleType": "SIMULATED_OPERATOR_CONTINUOUS",
+  "startedAt": "2026-07-21T01:23:01Z"
+}

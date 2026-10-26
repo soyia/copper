@@ -1,0 +1,76 @@
+{
+  "assetRights": [
+    {
+      "attribution": "Copyright holder attribution must be determined before redistribution.",
+      "evidenceSummary": "Example only: replace this with evidence for an actual inventory asset before building a release bundle.",
+      "id": "example-third-party-content",
+      "licenseExpression": "LicenseRef-Written-Permission-Required",
+      "licenseTextFile": "example-written-permission.txt",
+      "notice": "Example only: unresolved third-party content must not enter a customer source package or public repository.",
+      "pathPrefix": "docs/example-third-party-content/",
+      "redistributionStatus": "BLOCKED",
+      "repositoryRole": "source-web",
+      "reviewedAt": "2026-07-16T00:00:00Z",
+      "reviewedBy": "release-rights-owner",
+      "rightsHolders": [
+        "Replace with the actual rights holders"
+      ],
+      "source": "https://example.com/upstream-content",
+      "usage": "Example only; replace with the actual content use"
+    }
+  ],
+  "componentRights": [
+    {
+      "attribution": "Replace with the attribution required by the reviewed license text.",
+      "componentKey": "pkg:npm/example@1.0.0",
+      "evidenceSummary": "Replace with registry metadata and upstream source evidence.",
+      "id": "example-npm-component",
+      "licenseExpression": "MIT",
+      "licenseTextFile": "MIT.txt",
+      "notice": "Replace with the upstream NOTICE requirement, or an explicit statement that none was found.",
+      "redistributionStatus": "REVIEW_REQUIRED",
+      "relationship": "direct",
+      "reviewedAt": "2026-07-16T00:00:00Z",
+      "reviewedBy": "release-rights-owner",
+      "rightsHolders": [
+        "Replace with upstream copyright holder"
+      ],
+      "roles": [
+        "source-web"
+      ],
+      "source": "https://registry.npmjs.org/example",
+      "usage": "Example only; replace with the actual component use"
+    }
+  ],
+  "engineeringReview": {
+    "owner": "release-rights-owner",
+    "reviewedAt": "2026-07-16T00:00:00Z",
+    "status": "ENGINEERING_REVIEWED"
+  },
+  "format": "copper-third-party-rights-ledger/v1",
+  "legalReview": {
+    "issue": "https://github.com/soyia/copper_web/issues/60",
+    "status": "REQUIRED"
+  },
+  "releaseVersion": "REPLACE_WITH_EXACT_PRODUCT_VERSION",
+  "toolRights": [
+    {
+      "attribution": "Replace with upstream attribution.",
+      "category": "build-image",
+      "evidenceSummary": "Replace with immutable upstream image and license evidence.",
+      "id": "example-build-image",
+      "licenseExpression": "LicenseRef-Review-Required",
+      "licenseTextFile": "example-build-image.txt",
+      "notice": "Example only.",
+      "redistributionStatus": "REVIEW_REQUIRED",
+      "reference": "example.invalid/tool@sha256:REPLACE",
+      "reviewedAt": "2026-07-16T00:00:00Z",
+      "reviewedBy": "release-rights-owner",
+      "rightsHolders": [
+        "Replace with upstream rights holders"
+      ],
+      "source": "https://example.invalid/",
+      "usage": "Example only"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <conversionRule conversionWord="redactedMsg"
+                    converterClass="com.soyia.copperv2.config.RedactingMessageConverter"/>
+    <conversionRule conversionWord="redactedEx"
+                    converterClass="com.soyia.copperv2.config.RedactingThrowableProxyConverter"/>
+
+    <springProperty scope="context" name="COPPER_LOG_FILE" source="logging.file.name"
+                    defaultValue="copper-backend.log"/>
+    <springProperty scope="context" name="COPPER_ROOT_LOG_LEVEL" source="logging.level.root"
+                    defaultValue="INFO"/>
+
+    <property name="CONSOLE_LOG_PATTERN"
+              value="%clr(%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}){faint} %clr(%5p) %clr([%X{traceId:-no-trace}]){magenta} %clr(%-40.40logger{39}){cyan} : %redactedMsg%n%redactedEx"/>
+    <property name="FILE_LOG_PATTERN"
+              value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p [%X{traceId:-no-trace}] %-40.40logger{39} : %redactedMsg%n%redactedEx"/>
+
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+    <include resource="org/springframework/boot/logging/logback/file-appender.xml"/>
+
+    <root level="${COPPER_ROOT_LOG_LEVEL}">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>

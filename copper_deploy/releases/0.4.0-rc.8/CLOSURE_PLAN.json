@@ -1,0 +1,47 @@
+{
+  "format": "copper-release-closure-plan/v1",
+  "recordType": "EXECUTION_PLAN_20261025",
+  "version": "0.4.0-rc.8",
+  "scope": "INTERNAL_REHEARSAL_ONLY",
+  "status": "EXECUTION_AUTHORIZED_EVIDENCE_REQUIRED",
+  "requiredHost": "Ubuntu Server 24.04 LTS x86_64; Docker Engine 29.x with containerd image store; Compose Plugin 5.x",
+  "rc7FreezeUnchanged": true,
+  "candidateRightsEngineering": "NEW_SBOM_LICENSE_NOTICE_RECONCILIATION_REQUIRED",
+  "directUpgradeSources": [],
+  "ownerDeferredNonblocking": [
+    "browser_and_mobile",
+    "external_legal_and_accounting_review",
+    "external_contract_signatures",
+    "independent_non_developer_install_sample",
+    "customer_key_witness_and_signed_handover",
+    "github_support_platform_history_and_anonymous_public_reproduction"
+  ],
+  "publicReleaseAuthorized": false,
+  "customerProductionDeploymentAuthorized": false,
+  "webImageContextFix": {
+    "status": "PASS_FILTERED_CONTEXT_BUILD",
+    "sourceCommit": "2a5febfec7eac00dc576ef16c8324b549fac7c0b",
+    "pullRequest": "https://github.com/soyia/copper_web/pull/165",
+    "actualImageBuild": false
+  },
+  "optionalOcrNativeLive": "PASS_PRIVATE_IMAGE_NOT_ARCHIVED",
+  "offlineDependencyDownload": {
+    "status": "PASS_ALL_6_OFFICIAL_ARCHIVES",
+    "record": "docs/RELEASE_OFFLINE_DEPENDENCIES_20261016.json",
+    "archive": "copper-offline-dependencies-20261016.tar.gz",
+    "bytes": 89527712,
+    "sha256": "5030b8e125c4c82ad9a217c2b2834b1b9e390aee76ad6d272a063922cd7c7a1e",
+    "includesApplicationImages": false,
+    "hostInstalled": false
+  },
+  "preparationEvidence": "docs/RELEASE_CLOSEOUT_PREPARATION_20261016.json",
+  "authorizedHost": "18.142.134.26; user-authorized 2026-10-25",
+  "resultAuthority": "Actual stage artifacts, exact source/image hashes, timestamps and checkpoint/acceptance reports; this plan is not a pass/fail receipt.",
+  "requiredEvidence": [
+    "actual-image-build-and-import-identities",
+    "current-security-scan-and-six-sboms",
+    "license-and-notice-engineering-materials",
+    "offline-guided-medium",
+    "compose-install-full-and-incremental-backup-stage-switch-continuity"
+  ]
+}

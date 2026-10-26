@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Copper availability and recoverability every five minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+AccuracySec=30s
+Persistent=true
+Unit=copper-monitor.service
+
+[Install]
+WantedBy=timers.target

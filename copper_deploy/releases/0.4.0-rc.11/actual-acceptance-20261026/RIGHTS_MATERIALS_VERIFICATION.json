@@ -1,0 +1,45 @@
+{
+  "format": "copper-actual-material-packet-verification/v1",
+  "version": "0.4.0-rc.11",
+  "status": "ACTUAL_M4_MATERIALS_CLOSED_NOT_M6_APPROVAL",
+  "archive": "/private/tmp/copper-acceptance-20261025/FINAL_RC11_TOTAL_MATERIALS_R2.tar.gz",
+  "bytes": 5424904,
+  "sha256": "8c2c86a80615e76de47e324360a0fbc87c036ef6a22897c171488fffac7bbcd1",
+  "notice": "/private/tmp/copper-acceptance-20261025/FINAL_RC11_NOTICE_R2.txt",
+  "noticeBytes": 522570,
+  "noticeSha256": "50089ccd48e59a552028d1b258265b42730ba8a766f606d5aa41bb7673a345dc",
+  "materialManifestSha256": "0526c04a4ed85d174088ed081333f3b8cfb766cbfb26901f1c7ee7c7afe44bf8",
+  "checksumsSha256": "7b32d3fc261629fe7910b23e5f6526b1312530334be7a579514033e329df7a02",
+  "closedFiles": 799,
+  "ordinaryFiles": 800,
+  "actualSecurityBundleSha256": "1f8d276ae06031afc8cd6d1e92a53899d044c34f51c9dea222f3036995ea9086",
+  "actualManifestSha256": "e4730cb869efd613318471f5f8e12bb7abd54c88814aced9ac93bb31c74d3d48",
+  "actualOsIdentityChecks": 291,
+  "sourceUniqueDeferred": 4,
+  "sourceDeferredScopes": 6,
+  "remainingMaterialWork": 2,
+  "counts": {
+    "uniqueNonFileComponents": 699,
+    "withRawLegalMaterial": 691,
+    "deduplicatedRawLegalFiles": 753,
+    "componentsWithActualReportedArtifactHashMatch": 227,
+    "artifactHashAlgorithms": {
+      "Go-h1": 324,
+      "SHA-1": 63
+    },
+    "providerStatuses": {
+      "DISTRIBUTION_UMBRELLA_METADATA_LEGAL_COVERED_BY_EXACT_PACKAGE_INVENTORY": 3,
+      "ORIGINAL_MATERIALS_LOCATED_REVIEW_REQUIRED": 680,
+      "JRE_PARENT_LEGAL_SCOPE_REVIEW_REQUIRED_NO_SYNTHETIC_CENTRAL_GAV": 2,
+      "SCANNER_VERSION_UNKNOWN_PRESERVED_NOT_A_PROXY_RELEASE": 1,
+      "SOURCE_DECLARATION_EFFECTIVE_MODEL_RESOLVED_ORIGINALS_REVIEW_REQUIRED": 8,
+      "FIRST_PARTY_COPPER_SOURCE_OWNER_CONFIRMATION_REQUIRED": 1,
+      "MATERIALS_GAP_REVIEW_REQUIRED": 2,
+      "RPM_TRUST_ANCHOR_METADATA_NOT_EXECUTABLE_PROGRAM": 2
+    }
+  },
+  "formalM6": "NOT_CLOSED",
+  "engineeringApproval": null,
+  "legalApproval": null,
+  "runtimeOrInstallAcceptanceClaimed": false
+}

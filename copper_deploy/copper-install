@@ -1,0 +1,1804 @@
+#!/usr/bin/env python3
+"""Copper guided lifecycle entry for an operator-owned Ubuntu host.
+
+Destructive site removal is separated from ordinary uninstall and is only
+available after the customer's latest encrypted whole-site backup has been
+downloaded, independently verified, and recorded by the server.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import datetime as dt
+import hashlib
+import ipaddress
+import json
+import os
+import pathlib
+import re
+import shutil
+import socket
+import ssl
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from typing import Any, Iterable
+
+
+INSTALLER_VERSION = "0.4.5"
+STATE_FORMAT = "copper-guided-installer-state/v1"
+PLAN_FORMAT = "copper-guided-install-plan/v1"
+REMOVAL_FORMAT = "copper-guided-removal-state/v1"
+PHASES = (
+    "PLAN_CONFIRMED",
+    "RELEASE_READY",
+    "RUNTIME_TOOLS_READY",
+    "IMAGES_READY",
+    "CONFIG_READY",
+    "SERVICES_READY",
+    "WAITING_FOR_CERTIFICATE",
+    "COMPLETE",
+)
+IMAGE_ROLES = ("WEB", "BACKEND", "MYSQL")
+DOMAIN_RE = re.compile(
+    r"^(?=.{4,253}\.?$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
+SITE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,31}$")
+IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+AGE_RECIPIENT_RE = re.compile(r"^age1[0-9a-z]{20,}$")
+BACKUP_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class InstallerError(RuntimeError):
+    def __init__(self, message: str, *, exit_code: int = 3, next_step: str = "") -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+        self.next_step = next_step
+
+
+@dataclass(frozen=True)
+class Layout:
+    etc_dir: pathlib.Path
+    var_dir: pathlib.Path
+    releases_dir: pathlib.Path
+    command_link: pathlib.Path
+
+    @property
+    def env_file(self) -> pathlib.Path:
+        return self.etc_dir / "copper.env"
+
+    @property
+    def state_dir(self) -> pathlib.Path:
+        # Keep installer progress outside the business data root. Otherwise the
+        # first host preflight would correctly treat our own progress file as
+        # unknown pre-existing Copper data and fail closed.
+        return self.var_dir.parent / "copper-installer"
+
+    @property
+    def state_file(self) -> pathlib.Path:
+        return self.state_dir / "state.json"
+
+    @property
+    def plan_file(self) -> pathlib.Path:
+        return self.state_dir / "install-plan.json"
+
+    @property
+    def removal_file(self) -> pathlib.Path:
+        return self.state_dir / "removal.json"
+
+    @property
+    def copperctl_link(self) -> pathlib.Path:
+        return self.command_link.parent / "copperctl"
+
+    @property
+    def maintenance_link(self) -> pathlib.Path:
+        return self.command_link.parent / "copper-maintain"
+
+
+def layout_from_environment() -> Layout:
+    test_mode = os.environ.get("COPPER_INSTALL_TEST_MODE") == "1"
+    test_root = os.environ.get("COPPER_INSTALL_TEST_ROOT", "")
+    if test_mode:
+        if not test_root:
+            raise InstallerError("测试模式缺少 COPPER_INSTALL_TEST_ROOT")
+        root = pathlib.Path(test_root).resolve()
+        return Layout(
+            root / "etc/copper",
+            root / "var/lib/copper",
+            root / "opt/copper/releases",
+            root / "usr/local/sbin/copper-install",
+        )
+    return Layout(
+        pathlib.Path("/etc/copper"),
+        pathlib.Path("/var/lib/copper"),
+        pathlib.Path("/opt/copper/releases"),
+        pathlib.Path("/usr/local/sbin/copper-install"),
+    )
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def atomic_write(path: pathlib.Path, content: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def write_json(path: pathlib.Path, document: dict[str, Any], mode: int = 0o600) -> None:
+    atomic_write(path, json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n", mode)
+
+
+def read_json(path: pathlib.Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise InstallerError(f"无法读取安装记录：{path}（{error}）") from error
+    if not isinstance(value, dict):
+        raise InstallerError(f"安装记录格式不正确：{path}")
+    return value
+
+
+def parse_env(path: pathlib.Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise InstallerError(f"无法读取 {path}：{error}") from error
+    for number, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise InstallerError(f"{path.name} 第 {number} 行格式不正确")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            raise InstallerError(f"{path.name} 第 {number} 行的项目名称不正确")
+        if key in result:
+            raise InstallerError(f"{path.name} 重复填写了 {key}")
+        if any(character in value for character in ("\x00", "\r", "\n")):
+            raise InstallerError(f"{path.name} 中 {key} 的内容不安全")
+        result[key] = value
+    return result
+
+
+def require_media_values(values: dict[str, str]) -> None:
+    required = ["COPPER_RELEASE_VERSION", "COPPER_DEPLOY_COMMIT"]
+    for role in IMAGE_ROLES:
+        required.extend((f"COPPER_{role}_TAG", f"COPPER_{role}_IMAGE"))
+    missing = [name for name in required if not values.get(name)]
+    if missing:
+        raise InstallerError("安装介质缺少固定信息：" + "、".join(missing))
+    if not re.fullmatch(r"[0-9a-z][0-9A-Za-z._-]{0,127}", values["COPPER_RELEASE_VERSION"]):
+        raise InstallerError("安装介质中的产品版本不正确")
+    if not re.fullmatch(r"[0-9a-f]{40}", values["COPPER_DEPLOY_COMMIT"]):
+        raise InstallerError("安装介质中的部署版本标识不正确")
+    for role in IMAGE_ROLES:
+        if not IMAGE_ID_RE.fullmatch(values[f"COPPER_{role}_IMAGE"]):
+            raise InstallerError(f"安装介质中的 {role} 镜像不是不可变镜像")
+        if values[f"COPPER_{role}_TAG"].endswith(":latest"):
+            raise InstallerError(f"安装介质中的 {role} 镜像使用了可变化的 latest")
+
+
+def normalize_domain(value: str) -> str:
+    raw = value.strip()
+    if raw.lower().startswith("http://"):
+        raise InstallerError("Copper 只支持安全访问地址；请改用 https:// 或只填写域名")
+    if raw.lower().startswith("https://"):
+        try:
+            address = urllib.parse.urlsplit(raw)
+            port = address.port
+        except ValueError as error:
+            raise InstallerError("访问地址格式不正确") from error
+        if (
+            not address.hostname
+            or address.username
+            or address.password
+            or port is not None
+            or address.path not in ("", "/")
+            or address.query
+            or address.fragment
+        ):
+            raise InstallerError("访问地址只能包含 https:// 和域名，不能包含端口、路径、参数或账号")
+        domain = address.hostname
+    else:
+        if "://" in raw:
+            raise InstallerError("访问地址格式不正确；请填写域名或以 https:// 开头的地址")
+        domain = raw.rstrip("/")
+        if "/" in domain or "?" in domain or "#" in domain or "@" in domain:
+            raise InstallerError("访问地址不能包含路径、参数或账号")
+    domain = domain.strip().lower().rstrip(".")
+    if ":" in domain or re.fullmatch(r"[0-9.]+", domain):
+        return normalize_public_ipv4(domain)
+    try:
+        domain = domain.encode("idna").decode("ascii")
+    except UnicodeError as error:
+        raise InstallerError("域名格式不正确") from error
+    if not DOMAIN_RE.fullmatch(domain) or domain == "example.com" or domain.endswith(".example.com"):
+        raise InstallerError("域名格式不正确，或仍是示例域名")
+    return domain
+
+
+def tls_mode_for_address(address: str) -> str:
+    normalized = normalize_domain(address)
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        return "domain"
+    return "ip"
+
+
+def normalize_public_ipv4(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError as error:
+        raise InstallerError("公网 IP 格式不正确") from error
+    if address.version != 4 or not address.is_global or address.is_multicast or address.is_reserved:
+        raise InstallerError("请填写这台服务器的固定公网 IPv4 地址")
+    return str(address)
+
+
+def normalize_site_id(value: str) -> str:
+    site_id = value.strip().lower()
+    if not SITE_ID_RE.fullmatch(site_id):
+        raise InstallerError("站点代号需为 3-32 位小写字母、数字或短横线")
+    return site_id
+
+
+def validate_backup_public_key(value: str) -> str:
+    recipient = value.strip()
+    if not AGE_RECIPIENT_RE.fullmatch(recipient):
+        raise InstallerError("备份公钥格式不正确；只填写 age1 开头的公钥，绝不能填写 AGE-SECRET-KEY 私钥")
+    return recipient
+
+
+def resolve_addresses(domain: str, family: int) -> set[str]:
+    try:
+        records = socket.getaddrinfo(domain, 443, family, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return set()
+    return {str(record[4][0]).split("%", 1)[0] for record in records}
+
+
+def validate_dns(domain: str, expected_ipv4: str) -> dict[str, list[str]]:
+    domain = normalize_domain(domain)
+    expected_ipv4 = normalize_public_ipv4(expected_ipv4)
+    if tls_mode_for_address(domain) == "ip":
+        if domain != expected_ipv4:
+            raise InstallerError("访问公网 IP 与填写的服务器 IP 不一致")
+        return {"ipv4": [domain], "ipv6": []}
+    ipv4_records = resolve_addresses(domain, socket.AF_INET)
+    ipv6_records = resolve_addresses(domain, socket.AF_INET6)
+    if not ipv4_records:
+        raise InstallerError(
+            f"域名 {domain} 还没有查到 IPv4 地址",
+            next_step=f"请在域名服务商处添加 A 记录，指向 {expected_ipv4}；生效后重新运行安装器。",
+        )
+    if ipv4_records != {expected_ipv4}:
+        raise InstallerError(
+            f"域名现在指向 {', '.join(sorted(ipv4_records))}，与填写的服务器 IP {expected_ipv4} 不一致",
+            next_step="请修改 DNS，确保该域名的所有 A 记录只指向本机；等待生效后再继续。",
+        )
+    if ipv6_records:
+        raise InstallerError(
+            f"域名还设置了 IPv6 地址：{', '.join(sorted(ipv6_records))}",
+            next_step="本安装版本只验收 IPv4。请先删除该域名的 AAAA 记录，避免部分用户访问到错误主机。",
+        )
+    return {"ipv4": sorted(ipv4_records), "ipv6": sorted(ipv6_records)}
+
+
+def choose(prompt_text: str, choices: tuple[str, ...]) -> int:
+    """Return a one-based choice from an interactive terminal."""
+    if not sys.stdin.isatty():
+        raise InstallerError(prompt_text)
+    print("\n" + prompt_text)
+    for index, label in enumerate(choices, 1):
+        print(f"  {index}. {label}")
+    while True:
+        observed = input("请选择：").strip()
+        if observed.isdigit() and 1 <= int(observed) <= len(choices):
+            return int(observed)
+        print(f"请输入 1-{len(choices)}。")
+
+
+def validate_dns_with_choices(answers: dict[str, str], *, interactive: bool) -> dict[str, list[str]]:
+    """Keep the operator in the flow while DNS is being corrected."""
+    while True:
+        print(f"正在核对访问地址：{answers['domain']} -> {answers['publicIp']}")
+        try:
+            result = validate_dns(answers["domain"], answers["publicIp"])
+            print("访问公网 IP 已核对，无需 DNS。" if tls_mode_for_address(answers["domain"]) == "ip" else "域名与服务器 IP 一致。")
+            return result
+        except InstallerError as error:
+            print(f"\n当前未通过：{error}")
+            if error.next_step:
+                print(error.next_step)
+            if not interactive:
+                raise
+            selection = choose(
+                "你可以修正设置后继续，不必重新准备安装介质。",
+                ("我已设置好，重新检测", "更换域名或服务器 IP", "暂时退出，稍后再运行"),
+            )
+            if selection == 1:
+                continue
+            if selection == 2:
+                answers["domain"] = normalize_domain(prompt("新的域名或固定公网 IPv4", answers["domain"]))
+                answers["publicIp"] = normalize_public_ipv4(prompt("这台服务器的公网 IPv4 地址", answers["publicIp"]))
+                continue
+            raise InstallerError(
+                "操作者选择稍后继续；系统尚未写入安装配置",
+                exit_code=2,
+                next_step="DNS 生效后，从安装介质再次运行 sudo ./copper-install。",
+            )
+
+
+def parse_sha256_sums(path: pathlib.Path, media_root: pathlib.Path) -> dict[pathlib.Path, str]:
+    result: dict[pathlib.Path, str] = {}
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", raw)
+        if not match:
+            raise InstallerError(f"SHA256SUMS 第 {number} 行格式不正确")
+        relative_text = match.group(2)
+        if relative_text.startswith("./"):
+            relative_text = relative_text[2:]
+        relative = pathlib.PurePosixPath(relative_text)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise InstallerError("SHA256SUMS 包含介质目录之外的路径")
+        local = media_root.joinpath(*relative.parts)
+        if local in result:
+            raise InstallerError(f"SHA256SUMS 重复列出 {relative}")
+        result[local] = match.group(1)
+    return result
+
+
+def verify_media(media_root: pathlib.Path, values: dict[str, str]) -> None:
+    sums_file = media_root / "SHA256SUMS"
+    if not sums_file.is_file() or sums_file.is_symlink():
+        raise InstallerError("安装介质缺少 SHA256SUMS 校验文件")
+    expected = parse_sha256_sums(sums_file, media_root)
+    required = {
+        media_root / "OPERATOR_VALUES.env",
+        media_root / "RELEASE-MANIFEST.json",
+        media_root / "copper-install",
+        media_root / (values.get("COPPER_DEPLOY_ARCHIVE") or f"copper-deploy-{values['COPPER_DEPLOY_COMMIT']}.tar.gz"),
+    }
+    reused_images: set[str] = set()
+    for role in IMAGE_ROLES:
+        filename = values.get(f"COPPER_{role}_ARCHIVE") or f"images/copper-{role.lower()}-amd64.tar.gz"
+        archive = media_root / filename
+        if archive in expected:
+            required.add(archive)
+            continue
+        expected_id = values[f"COPPER_{role}_IMAGE"]
+        existing = run(
+            ["docker", "image", "inspect", expected_id, "--format", "{{.Id}}|{{.Architecture}}"],
+            capture=True,
+            check=False,
+        )
+        if existing.returncode != 0 or (existing.stdout or "").strip() != f"{expected_id}|amd64":
+            raise InstallerError(
+                f"安装介质未包含 {role.lower()} 运行文件，服务器也没有完全相同的安全副本"
+            )
+        reused_images.add(role.lower())
+    missing = [str(path.relative_to(media_root)) for path in sorted(required) if path not in expected]
+    if missing:
+        raise InstallerError("以下安装文件没有进入校验清单：" + "、".join(missing))
+    actual_files = {
+        path
+        for path in media_root.rglob("*")
+        if path.is_file() and not path.is_symlink() and path.name != "SHA256SUMS"
+    }
+    extra = sorted(actual_files - set(expected))
+    omitted = sorted(set(expected) - actual_files)
+    if extra:
+        raise InstallerError("介质中存在未校验文件：" + "、".join(str(path.relative_to(media_root)) for path in extra))
+    if omitted:
+        raise InstallerError("校验清单中的文件不存在：" + "、".join(str(path.relative_to(media_root)) for path in omitted))
+    for file_path, wanted in expected.items():
+        if file_path.is_symlink() or not file_path.is_file():
+            raise InstallerError(f"安装文件不是普通文件：{file_path.relative_to(media_root)}")
+        observed = sha256_file(file_path)
+        if observed != wanted:
+            raise InstallerError(f"安装文件校验失败：{file_path.relative_to(media_root)}")
+    validate_release_manifest(media_root / "RELEASE-MANIFEST.json", values)
+    if reused_images:
+        print("服务器已按不可变摘要复用，无需重复上传：" + "、".join(sorted(reused_images)))
+
+
+def validate_release_manifest(path: pathlib.Path, values: dict[str, str]) -> None:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise InstallerError("安装介质的发布说明无法读取") from error
+    if not isinstance(document, dict) or document.get("format") != "copper-m7-zero-support-medium/v1":
+        raise InstallerError("安装介质的发布说明格式不受支持")
+    if document.get("status") != "INTERNAL_REHEARSAL_ONLY" or document.get("platform") != "linux/amd64":
+        raise InstallerError("当前介质不是 Ubuntu x86_64 内部演练介质")
+    deploy = document.get("deploy") if isinstance(document.get("deploy"), dict) else {}
+    if deploy.get("commit") != values["COPPER_DEPLOY_COMMIT"]:
+        raise InstallerError("发布说明与部署程序版本不一致")
+    for role in IMAGE_ROLES:
+        item = document.get(role.lower()) if isinstance(document.get(role.lower()), dict) else {}
+        if item.get("importedImageId") != values[f"COPPER_{role}_IMAGE"]:
+            raise InstallerError(f"发布说明与 {role.lower()} 运行文件不一致")
+
+
+def safe_tar_members(archive: pathlib.Path) -> list[tarfile.TarInfo]:
+    members: list[tarfile.TarInfo] = []
+    with tarfile.open(archive, "r:gz") as package:
+        for member in package.getmembers():
+            pure = pathlib.PurePosixPath(member.name)
+            if pure.is_absolute() or ".." in pure.parts or member.isdev() or member.isfifo():
+                raise InstallerError(f"部署包包含不安全路径：{member.name}")
+            if member.issym() or member.islnk():
+                target = pathlib.PurePosixPath(member.linkname)
+                if target.is_absolute() or ".." in target.parts:
+                    raise InstallerError(f"部署包包含不安全链接：{member.name}")
+            members.append(member)
+    return members
+
+
+def render_environment(template: str, replacements: dict[str, str]) -> str:
+    seen: set[str] = set()
+    output: list[str] = []
+    for line in template.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key in replacements:
+                if key in seen:
+                    raise InstallerError(f"配置模板重复包含 {key}")
+                output.append(f"{key}={replacements[key]}")
+                seen.add(key)
+                continue
+        output.append(line)
+    missing = sorted(set(replacements) - seen)
+    if missing:
+        raise InstallerError("配置模板缺少：" + "、".join(missing))
+    return "\n".join(output) + "\n"
+
+
+def replace_environment_value(content: str, key: str, value: str) -> str:
+    return render_environment(content, {key: value})
+
+
+def parse_retry_after(log_text: str) -> str:
+    patterns = (
+        r"retry after[=: ]+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+-]+Z?)",
+        r'"retryAfter"\s*:\s*"([^"]+)"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, log_text, re.IGNORECASE)
+        if match:
+            return match.group(1).rstrip(".,;\"")
+    return ""
+
+
+def format_retry_time(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        normalized = value.replace(" ", "T", 1).replace("Z", "+00:00")
+        instant = dt.datetime.fromisoformat(normalized)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=dt.timezone.utc)
+        return instant.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    except ValueError:
+        return value
+
+
+def phase_index(phase: str) -> int:
+    try:
+        return PHASES.index(phase)
+    except ValueError:
+        return -1
+
+
+def run(
+    command: list[str],
+    *,
+    cwd: pathlib.Path | None = None,
+    capture: bool = False,
+    check: bool = True,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        input=input_text,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+        check=check,
+    )
+
+
+def read_os_release() -> dict[str, str]:
+    values = parse_env(pathlib.Path("/etc/os-release"))
+    return {key: value[1:-1] if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"') else value for key, value in values.items()}
+
+
+def memory_bytes() -> int:
+    for line in pathlib.Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+        if line.startswith("MemTotal:"):
+            return int(line.split()[1]) * 1024
+    return 0
+
+
+def port_listeners() -> set[int]:
+    result = run(["ss", "-ltnH"], capture=True, check=False)
+    listeners: set[int] = set()
+    if result.returncode != 0:
+        raise InstallerError("无法检查 80/443 端口是否可用")
+    for line in (result.stdout or "").splitlines():
+        local = line.split()[3] if len(line.split()) >= 4 else ""
+        match = re.search(r":([0-9]+)$", local)
+        if match:
+            listeners.add(int(match.group(1)))
+    return listeners
+
+
+def runtime_ready() -> bool:
+    if not shutil.which("docker"):
+        return False
+    engine = run(["docker", "version", "--format", "{{.Server.Version}}"], capture=True, check=False)
+    compose = run(["docker", "compose", "version", "--short"], capture=True, check=False)
+    return engine.returncode == 0 and (engine.stdout or "").strip().startswith("29.") and compose.returncode == 0 and (compose.stdout or "").strip().startswith("5.")
+
+
+def check_runtime_download() -> None:
+    if runtime_ready():
+        return
+    request = urllib.request.Request("https://download.docker.com/linux/ubuntu/gpg", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            prefix = response.read(40)
+            if response.status != 200 or b"PGP PUBLIC KEY" not in prefix:
+                raise InstallerError("无法验证 Docker 官方下载源")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as error:
+        raise InstallerError(
+            "这台服务器现在无法访问 Docker 官方下载源",
+            next_step="请先恢复互联网访问，或改用包含 Docker 安装包的完整离线介质；安装器不会使用来路不明的软件源。",
+        ) from error
+
+
+def environment_precheck(layout: Layout, *, managed_existing: bool) -> dict[str, Any]:
+    if os.geteuid() != 0:
+        raise InstallerError("请在命令前加 sudo 后重新运行")
+    os_release = read_os_release()
+    architecture = os.uname().machine
+    if os_release.get("ID") != "ubuntu" or os_release.get("VERSION_ID") != "24.04" or architecture != "x86_64":
+        raise InstallerError(
+            f"当前为 {os_release.get('PRETTY_NAME', '未知系统')} / {architecture}，本版本只支持 Ubuntu Server 24.04 x86_64"
+        )
+    cpu = os.cpu_count() or 0
+    memory = memory_bytes()
+    available = shutil.disk_usage(layout.releases_dir.parent if layout.releases_dir.parent.exists() else pathlib.Path("/")).free
+    if cpu < 2:
+        raise InstallerError(f"当前只有 {cpu} 个 CPU，至少需要 2 个")
+    if memory < 3_800_000_000:
+        raise InstallerError(f"当前内存约 {memory / 1024**3:.1f} GiB，至少需要 4 GiB")
+    if available < 20 * 1024**3:
+        raise InstallerError(f"当前可用磁盘约 {available / 1024**3:.1f} GiB，安装前至少需要 20 GiB")
+    for command in ("tar", "ss", "sha256sum"):
+        if not shutil.which(command):
+            raise InstallerError(f"系统缺少基础命令 {command}，请使用完整的 Ubuntu Server 24.04")
+    listeners = port_listeners()
+    occupied = sorted({80, 443} & listeners)
+    if occupied and not managed_existing:
+        raise InstallerError(
+            "安全访问端口已被其他程序使用：" + "、".join(str(value) for value in occupied),
+            next_step="请先确认并停止占用 80/443 的旧网站或代理；安装器不会自动关闭其他软件。",
+        )
+    check_runtime_download()
+    return {
+        "os": os_release.get("PRETTY_NAME", "Ubuntu 24.04"),
+        "architecture": architecture,
+        "cpu": cpu,
+        "memoryBytes": memory,
+        "availableDiskBytes": available,
+        "occupiedPublicPorts": occupied,
+        "runtimeAlreadyReady": runtime_ready(),
+    }
+
+
+def require_operator_root() -> None:
+    if os.geteuid() != 0:
+        raise InstallerError("请在命令前加 sudo 后重新运行")
+
+
+def existing_environment(layout: Layout) -> dict[str, str]:
+    if not layout.env_file.exists():
+        if not layout.state_file.exists():
+            orphaned: list[str] = []
+            for path in (layout.command_link, layout.copperctl_link, layout.maintenance_link):
+                if path.is_symlink() or path.exists():
+                    orphaned.append(str(path))
+            if layout.state_dir.exists() and any(layout.state_dir.iterdir()):
+                orphaned.append(str(layout.state_dir))
+            if layout.releases_dir.exists() and any(layout.releases_dir.iterdir()):
+                orphaned.append(str(layout.releases_dir))
+            if orphaned:
+                raise InstallerError(
+                    "检测到旧安装记录或失效的程序入口，但没有可确认的 Copper 配置",
+                    next_step="请不要继续覆盖。先确认旧站点是否需要保留；只有明确授权永久清理后才能重新安装。",
+                )
+        if layout.var_dir.exists():
+            entries = set(layout.var_dir.iterdir())
+            if entries:
+                raise InstallerError(
+                    "检测到已有 Copper 数据，但没有可确认的受管配置",
+                    next_step="请不要重装或删除目录。先备份并由维护人员确认原安装来源。",
+                )
+        return {}
+    if layout.env_file.is_symlink():
+        raise InstallerError("现有 Copper 配置是符号链接，安装器拒绝覆盖")
+    values = parse_env(layout.env_file)
+    for key in ("COPPER_SITE_ID", "COPPER_RELEASE_VERSION", "COPPER_DOMAIN"):
+        if not values.get(key):
+            raise InstallerError(f"现有配置缺少 {key}，安装器不会猜测或覆盖")
+    return values
+
+
+def media_directory(argument: str | None, layout: Layout) -> pathlib.Path:
+    candidates: list[pathlib.Path] = []
+    if argument:
+        candidates.append(pathlib.Path(argument))
+    script_root = pathlib.Path(__file__).resolve().parent
+    candidates.extend((pathlib.Path.cwd(), script_root))
+    if layout.state_file.exists():
+        state = read_json(layout.state_file)
+        if state.get("mediaRoot"):
+            candidates.append(pathlib.Path(str(state["mediaRoot"])))
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if (resolved / "OPERATOR_VALUES.env").is_file() and (resolved / "SHA256SUMS").is_file():
+            return resolved
+    raise InstallerError(
+        "没有找到完整安装介质",
+        next_step="请进入安装介质目录后运行 sudo ./copper-install，或使用 --media-dir 指定目录。",
+    )
+
+
+def prompt(label: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{label}{suffix}：").strip()
+    return value or default
+
+
+def default_site_id(domain: str) -> str:
+    label = re.sub(r"[^a-z0-9-]", "-", domain.split(".")[0]).strip("-")
+    value = label if label.startswith("copper-") else f"copper-{label}"
+    return value[:32].strip("-")
+
+
+def collect_answers(args: argparse.Namespace, existing: dict[str, str]) -> dict[str, str]:
+    supplied: dict[str, Any] = {}
+    if args.answers:
+        supplied = read_json(pathlib.Path(args.answers).expanduser().resolve())
+    default_domain = str(supplied.get("domain") or existing.get("COPPER_DOMAIN") or "")
+    if not default_domain and not sys.stdin.isatty():
+        raise InstallerError("非交互运行必须使用 --answers 提供安装信息")
+    domain = str(supplied.get("domain") or prompt("准备使用的域名或固定公网 IPv4", default_domain))
+    domain = normalize_domain(domain)
+    default_site = existing.get("COPPER_SITE_ID") or default_site_id(domain)
+    site_id = normalize_site_id(str(supplied.get("siteId") or prompt("站点代号（以后识别备份会用到）", default_site)))
+    public_ip = normalize_public_ipv4(str(supplied.get("publicIp") or prompt("这台服务器的公网 IPv4 地址")))
+    recipient = str(supplied.get("backupPublicKey") or existing.get("COPPER_BACKUP_AGE_RECIPIENT") or "")
+    if not recipient:
+        recipient = prompt("客户备份公钥（age1 开头；不要填写私钥）")
+    recipient = validate_backup_public_key(recipient)
+    timezone = str(supplied.get("timeZone") or existing.get("COPPER_TIME_ZONE") or "Asia/Shanghai")
+    if not re.fullmatch(r"[A-Za-z_+-]+(?:/[A-Za-z0-9_+.-]+)+", timezone):
+        raise InstallerError("时区格式不正确")
+    return {
+        "siteId": site_id,
+        "domain": domain,
+        "publicIp": public_ip,
+        "backupPublicKey": recipient,
+        "timeZone": timezone,
+    }
+
+
+def plan_document(answers: dict[str, str], values: dict[str, str], dns: dict[str, list[str]], mode: str) -> dict[str, Any]:
+    return {
+        "format": PLAN_FORMAT,
+        "installerVersion": INSTALLER_VERSION,
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "mode": mode,
+        "siteId": answers["siteId"],
+        "releaseVersion": values["COPPER_RELEASE_VERSION"],
+        "deployCommit": values["COPPER_DEPLOY_COMMIT"],
+        "domain": answers["domain"],
+        "publicIpv4": answers["publicIp"],
+        "dns": dns,
+        "timeZone": answers["timeZone"],
+        # This is a public encryption recipient, not a private key or password.
+        # Keeping it in the root-only plan makes an interrupted pre-config install resumable.
+        "backupPublicKey": answers["backupPublicKey"],
+        "backupPublicKeySha256": hashlib.sha256(answers["backupPublicKey"].encode()).hexdigest(),
+        "images": {role.lower(): values[f"COPPER_{role}_IMAGE"] for role in IMAGE_ROLES},
+    }
+
+
+def plan_digest(plan: dict[str, Any]) -> str:
+    encoded = json.dumps(plan, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def show_plan(plan: dict[str, Any], facts: dict[str, Any]) -> None:
+    print("\n安装前确认")
+    print("=" * 60)
+    print(f"产品版本：{plan['releaseVersion']}（内部演练）")
+    print(f"站点代号：{plan['siteId']}")
+    print(f"访问地址：https://{plan['domain']}")
+    identity = "固定公网 IP 已核对，无需 DNS" if tls_mode_for_address(str(plan["domain"])) == "ip" else "DNS 已核对"
+    print(f"服务器 IP：{plan['publicIpv4']}（{identity}）")
+    print(f"服务器环境：{facts['os']}，{facts['cpu']} CPU，内存 {facts['memoryBytes'] / 1024**3:.1f} GiB")
+    print(f"可用磁盘：{facts['availableDiskBytes'] / 1024**3:.1f} GiB")
+    print("备份密钥：只记录了客户公钥；私钥不会进入服务器")
+    print("本操作不会删除现有数据，也不会开放数据库或后台接口端口。")
+    print("=" * 60)
+
+
+def confirm_plan(plan: dict[str, Any], args: argparse.Namespace) -> None:
+    if args.yes:
+        if not args.answers:
+            raise InstallerError("--yes 只能与 --answers 一起使用，避免跳过人工确认")
+        return
+    if not sys.stdin.isatty():
+        raise InstallerError("当前不是交互终端；请使用 --answers 和 --yes，或直接在终端运行")
+    expected = f"INSTALL {plan['siteId']}"
+    print("请完整输入下面双引号内的确认文字；双引号本身不用输入：")
+    print(f'"{expected}"')
+    observed = input("确认文字：").strip()
+    if observed != expected:
+        raise InstallerError("未确认安装，系统没有写入配置或启动服务", exit_code=2)
+
+
+def initial_state(plan: dict[str, Any], media_root: pathlib.Path) -> dict[str, Any]:
+    return {
+        "format": STATE_FORMAT,
+        "installerVersion": INSTALLER_VERSION,
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "phase": "PLAN_CONFIRMED",
+        "planSha256": plan_digest(plan),
+        "siteId": plan["siteId"],
+        "releaseVersion": plan["releaseVersion"],
+        "deployCommit": plan["deployCommit"],
+        "domain": plan["domain"],
+        "publicIpv4": plan["publicIpv4"],
+        "mediaRoot": str(media_root),
+        "createdAt": now_iso(),
+        "updatedAt": now_iso(),
+        "lastError": "",
+        "certificateRetryAfter": "",
+    }
+
+
+def save_state(layout: Layout, state: dict[str, Any], phase: str | None = None, error: str = "") -> None:
+    if phase:
+        state["phase"] = phase
+    state["updatedAt"] = now_iso()
+    state["lastError"] = error
+    write_json(layout.state_file, state)
+
+
+def validate_state(state: dict[str, Any]) -> None:
+    if state.get("format") != STATE_FORMAT or state.get("phase") not in PHASES:
+        raise InstallerError("安装记录版本不受支持；请不要手工修改状态文件")
+
+
+def release_root(layout: Layout, state: dict[str, Any]) -> pathlib.Path:
+    return layout.releases_dir / str(state["releaseVersion"])
+
+
+def extract_release(layout: Layout, media_root: pathlib.Path, values: dict[str, str], state: dict[str, Any]) -> pathlib.Path:
+    target = release_root(layout, state)
+    marker = target / ".copper-guided-release.json"
+    if target.exists():
+        if marker.is_file():
+            current = read_json(marker)
+            if current.get("deployCommit") == state["deployCommit"] and (target / "copperctl").is_file():
+                return target
+        raise InstallerError(
+            f"产品目录 {target} 已存在，但不是本安装器创建的同一版本",
+            next_step="安装器不会覆盖来源不明的程序目录。请保留现场并由维护人员确认。",
+        )
+    archive_name = values.get("COPPER_DEPLOY_ARCHIVE") or f"copper-deploy-{values['COPPER_DEPLOY_COMMIT']}.tar.gz"
+    archive = media_root / archive_name
+    safe_tar_members(archive)
+    layout.releases_dir.mkdir(parents=True, exist_ok=True)
+    temporary = pathlib.Path(tempfile.mkdtemp(prefix=f".{state['releaseVersion']}.", dir=layout.releases_dir))
+    try:
+        with tarfile.open(archive, "r:gz") as package:
+            package.extractall(temporary)
+        if not (temporary / "copperctl").is_file() or not (temporary / "scripts/bootstrap-ubuntu.sh").is_file():
+            raise InstallerError("部署包内容不完整")
+        write_json(
+            temporary / ".copper-guided-release.json",
+            {"format": "copper-guided-release/v1", "deployCommit": state["deployCommit"], "installedAt": now_iso()},
+            0o444,
+        )
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return target
+
+
+def ensure_command_link(layout: Layout, root: pathlib.Path) -> None:
+    installer = root / "copper-install"
+    if not installer.is_file():
+        raise InstallerError("部署包缺少 copper-install")
+    layout.command_link.parent.mkdir(parents=True, exist_ok=True)
+    if layout.command_link.exists() and not layout.command_link.is_symlink():
+        raise InstallerError(f"{layout.command_link} 已存在且不是 Copper 管理的入口")
+    temporary = layout.command_link.with_name(f".{layout.command_link.name}.{os.getpid()}")
+    try:
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(installer)
+        os.replace(temporary, layout.command_link)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def ensure_maintenance_link(layout: Layout, root: pathlib.Path) -> None:
+    source = root / "copper-maintain"
+    link = layout.maintenance_link
+    if not source.is_file() or source.is_symlink():
+        raise InstallerError("发布包缺少服务器维护菜单 copper-maintain")
+    os.chmod(source, 0o755)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.exists() and not link.is_symlink():
+        raise InstallerError(f"{link} 已存在且不是 Copper 管理的入口")
+    temporary = link.with_name(f".{link.name}.{os.getpid()}")
+    try:
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(source)
+        os.replace(temporary, link)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def verify_completed_installation(layout: Layout, root: pathlib.Path, state: dict[str, Any]) -> None:
+    expected_entries = (
+        (layout.command_link, root / "copper-install"),
+        (layout.copperctl_link, root / "copperctl"),
+        (layout.maintenance_link, root / "copper-maintain"),
+    )
+    for link, source in expected_entries:
+        if not source.is_file() or source.is_symlink() or not os.access(source, os.X_OK):
+            raise InstallerError(f"安装记录显示已完成，但程序入口文件缺失或不可执行：{source}")
+        if not link.is_symlink():
+            raise InstallerError(f"安装记录显示已完成，但系统入口缺失：{link}")
+        try:
+            resolved = link.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise InstallerError(f"安装记录显示已完成，但系统入口已经失效：{link}") from error
+        if resolved != source.resolve(strict=True):
+            raise InstallerError(f"系统入口指向了其他版本：{link}")
+
+    version = run([str(root / "copperctl"), "version"], cwd=root, capture=True, check=False)
+    if version.returncode != 0:
+        raise InstallerError("Copper 统一维护命令无法执行")
+    status = run([str(root / "copperctl"), "status"], cwd=root, capture=True, check=False)
+    if status.returncode != 0:
+        raise InstallerError("Copper 三层服务状态检查未通过")
+    for service in ("mysql", "backend", "web"):
+        health = run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+                f"copper-{service}-1",
+            ],
+            capture=True,
+            check=False,
+        )
+        if health.returncode != 0 or (health.stdout or "").strip() != "healthy":
+            raise InstallerError(f"{service} 服务未达到健康状态")
+    ready, reason = https_ready(str(state["domain"]))
+    if not ready:
+        raise InstallerError(f"安全访问复查失败：{reason or 'HTTPS 不可用'}")
+
+
+def validate_managed_request(
+    layout: Layout,
+    state: dict[str, Any],
+    plan: dict[str, Any],
+    values: dict[str, str],
+    answers_path: str | None,
+) -> None:
+    validate_state(state)
+    if plan.get("format") != PLAN_FORMAT or state.get("planSha256") != plan_digest(plan):
+        raise InstallerError("安装计划与记录不一致；安装器拒绝继续")
+    expected = {
+        "installerVersion": INSTALLER_VERSION,
+        "releaseVersion": values["COPPER_RELEASE_VERSION"],
+        "deployCommit": values["COPPER_DEPLOY_COMMIT"],
+    }
+    for key, wanted in expected.items():
+        if str(state.get(key) or "") != wanted:
+            raise InstallerError(
+                "服务器保留的是另一份安装记录，不能把它当作本次安装成功",
+                next_step="请停止本次安装。确认旧站点是否需要保留；只有明确授权永久清理后才能重新开始。",
+            )
+    if not answers_path:
+        return
+    requested = read_json(pathlib.Path(answers_path).expanduser().resolve())
+    comparisons = {
+        "siteId": normalize_site_id(str(requested.get("siteId") or "")),
+        "domain": normalize_domain(str(requested.get("domain") or "")),
+        "publicIpv4": normalize_public_ipv4(str(requested.get("publicIp") or "")),
+    }
+    for key, wanted in comparisons.items():
+        current = str(state.get(key) or plan.get(key) or "")
+        if current != wanted:
+            raise InstallerError(
+                f"服务器安装记录属于 {current or '另一站点'}，本次输入为 {wanted}；禁止跨站点复用旧记录",
+                next_step="请停止本次安装。确认旧站点是否需要保留；只有明确授权永久清理后才能重新开始。",
+            )
+def load_images(media_root: pathlib.Path, values: dict[str, str]) -> None:
+    for role in IMAGE_ROLES:
+        archive_name = values.get(f"COPPER_{role}_ARCHIVE") or f"images/copper-{role.lower()}-amd64.tar.gz"
+        expected_id = values[f"COPPER_{role}_IMAGE"]
+        existing = run(["docker", "image", "inspect", expected_id, "--format", "{{.Id}}|{{.Architecture}}"], capture=True, check=False)
+        if existing.returncode != 0 or (existing.stdout or "").strip() != f"{expected_id}|amd64":
+            archive = media_root / archive_name
+            if not archive.is_file() or archive.is_symlink():
+                raise InstallerError(f"服务器缺少 {role.lower()} 运行文件，安装介质也未提供对应归档")
+            print(f"正在准备 {role.lower()} 运行文件……")
+            run(["docker", "load", "--input", str(archive)])
+        verified = run(["docker", "image", "inspect", expected_id, "--format", "{{.Id}}|{{.Architecture}}"], capture=True, check=False)
+        if verified.returncode != 0 or (verified.stdout or "").strip() != f"{expected_id}|amd64":
+            raise InstallerError(f"{role.lower()} 运行文件导入后与介质记录不一致")
+        by_id = run(["docker", "image", "inspect", expected_id], capture=True, check=False)
+        if by_id.returncode != 0:
+            raise InstallerError(f"{role.lower()} 不可变镜像无法按校验值读取")
+
+
+def prepare_ip_tls_archive(layout: Layout, root: pathlib.Path, media_root: pathlib.Path | None, configured: str = "") -> pathlib.Path:
+    """Persist the reviewed client; an installed site must not need its media."""
+    script = (root / "scripts/ip-tls.sh").read_text(encoding="utf-8")
+    version = re.search(r'^ACME_VERSION="([0-9.]+)"$', script, re.M)
+    digest = re.search(r'^ACME_ARCHIVE_SHA256="([0-9a-f]{64})"$', script, re.M)
+    if not version or not digest:
+        raise InstallerError("正式 IP 证书入口缺少锁定的 ACME 客户端身份")
+    name = f"acme.sh-{version[1]}.tar.gz"
+    default = layout.releases_dir.parent / "offline" / name
+    target = pathlib.Path(configured) if configured else default
+    if not target.is_absolute() or target.is_symlink():
+        raise InstallerError("现有 ACME 客户端路径不安全")
+    if target.exists():
+        if not target.is_file() or sha256_file(target) != digest[1]:
+            raise InstallerError("现有 ACME 客户端摘要不匹配，拒绝覆盖")
+        return target
+    if target != default:
+        raise InstallerError("现有自定义 ACME 客户端路径缺少文件，安装器不会改写该配置")
+    if media_root is None:
+        raise InstallerError("公网 IP 安装需要包含 ACME 客户端的完整介质")
+    source = media_root / "offline" / name
+    if source.is_symlink() or not source.is_file() or sha256_file(source) != digest[1]:
+        raise InstallerError("介质中的 ACME 客户端缺失或摘要不匹配")
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".acme-", dir=target.parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream, source.open("rb") as original:
+            shutil.copyfileobj(original, stream)
+        os.chmod(temporary, 0o400)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
+def ensure_configuration(layout: Layout, root: pathlib.Path, plan: dict[str, Any], values: dict[str, str], answers: dict[str, str], media_root: pathlib.Path | None = None) -> None:
+    existing = parse_env(layout.env_file) if layout.env_file.exists() else {}
+    if existing.get("COPPER_RELEASE_VERSION") not in (None, "", plan["releaseVersion"], "REPLACE_WITH_INSTALLED_RELEASE_VERSION"):
+        raise InstallerError("现有 Copper 产品版本不同，不能作为同版本修复覆盖")
+    if existing.get("COPPER_RELEASE_VERSION") == plan["releaseVersion"] and existing.get("COPPER_SITE_ID") != plan["siteId"]:
+        raise InstallerError("现有配置属于另一站点，安装器不会改写站点身份")
+    if existing.get("COPPER_RELEASE_VERSION") == plan["releaseVersion"]:
+        if existing.get("COPPER_PROJECT_NAME", "copper") != "copper" or existing.get("COPPER_DEPLOY_MODE", "standard") != "standard":
+            raise InstallerError("现有部署不是本向导管理的 standard/copper 站点，安装器不会改写")
+        if existing.get("COPPER_DOMAIN") != plan["domain"]:
+            raise InstallerError("现有访问地址不同；请使用更换访问地址流程，修复不会改写地址")
+    recipient = existing.get("COPPER_BACKUP_AGE_RECIPIENT", "")
+    if AGE_RECIPIENT_RE.fullmatch(recipient) and recipient != answers["backupPublicKey"]:
+        raise InstallerError("现有备份公钥不同；必须使用密钥轮换流程，安装器不会静默换钥")
+    run([str(root / "scripts/prepare-host.sh")], cwd=root)
+    replacements = {
+        "COPPER_SITE_ID": plan["siteId"],
+        "COPPER_PROJECT_NAME": "copper",
+        "COPPER_RELEASE_VERSION": plan["releaseVersion"],
+        "COPPER_DEPLOY_MODE": "standard",
+        "COPPER_DOMAIN": plan["domain"],
+        "COPPER_TLS_MODE": tls_mode_for_address(str(plan["domain"])),
+        "COPPER_IMAGE_DELIVERY": "offline",
+        "COPPER_WEB_IMAGE": values["COPPER_WEB_IMAGE"],
+        "COPPER_BACKEND_IMAGE": values["COPPER_BACKEND_IMAGE"],
+        "COPPER_MYSQL_IMAGE": values["COPPER_MYSQL_IMAGE"],
+        "COPPER_TIME_ZONE": plan["timeZone"],
+        "COPPER_BACKUP_AGE_RECIPIENT": answers["backupPublicKey"],
+    }
+    if replacements["COPPER_TLS_MODE"] == "ip":
+        replacements["COPPER_ACME_ARCHIVE"] = str(prepare_ip_tls_archive(layout, root, media_root, existing.get("COPPER_ACME_ARCHIVE", "")))
+    if existing:
+        managed_values = {key: existing.get(key, "") for key in replacements}
+        if all(managed_values[key] == value for key, value in replacements.items()):
+            return
+    template = layout.env_file.read_text(encoding="utf-8") if existing else (root / "config/copper.env.example").read_text(encoding="utf-8")
+    if existing:
+        # Add only newly managed keys; preserve customer OCR/remote/backup policy.
+        template = template.rstrip("\n") + "\n" + "".join(f"{key}=\n" for key in replacements if key not in existing)
+    rendered = render_environment(template, replacements)
+    if layout.env_file.exists():
+        backup = layout.etc_dir / f"copper.env.before-guided-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        shutil.copy2(layout.env_file, backup)
+        os.chmod(backup, 0o600)
+    atomic_write(layout.env_file, rendered, 0o600)
+
+
+def https_ready(domain: str, timeout: float = 5.0) -> tuple[bool, str]:
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((domain, 443), timeout=timeout) as connection:
+            with context.wrap_socket(connection, server_hostname=domain) as tls:
+                # create_default_context() enables certificate-chain and
+                # hostname verification.  Passing server_hostname performs
+                # both checks during the TLS handshake on Python 3.12 too.
+                request = f"GET /healthz HTTP/1.1\r\nHost: {domain}\r\nConnection: close\r\n\r\n".encode()
+                tls.sendall(request)
+                response = tls.recv(200).decode("latin-1", "replace")
+                if " 200 " not in response.split("\r\n", 1)[0]:
+                    return False, "安全连接已建立，但健康检查没有返回成功"
+        return True, ""
+    except (OSError, ssl.SSLError, ssl.CertificateError) as error:
+        return False, str(error)
+
+
+def certificate_logs(root: pathlib.Path) -> str:
+    result = run([str(root / "copperctl"), "logs", "web"], cwd=root, capture=True, check=False)
+    return result.stdout or ""
+
+
+def wait_for_https(domain: str, root: pathlib.Path, state: dict[str, Any], layout: Layout, seconds: int) -> bool:
+    print(f"正在申请并核对 https://{domain} 的安全访问证书……")
+    deadline = time.monotonic() + seconds
+    last_error = ""
+    while True:
+        ready, last_error = https_ready(domain)
+        if ready:
+            state["certificateRetryAfter"] = ""
+            return True
+        if time.monotonic() >= deadline:
+            break
+        remaining = max(0, int(deadline - time.monotonic()))
+        print(f"  证书尚未就绪，继续等待（最多还等 {remaining} 秒）")
+        time.sleep(min(10, max(1, remaining)))
+    logs = certificate_logs(root)
+    retry_after = parse_retry_after(logs)
+    state["certificateRetryAfter"] = retry_after
+    message = "安全访问证书尚未取得"
+    if "rateLimited" in logs or "too many certificates" in logs.lower() or retry_after:
+        readable = format_retry_time(retry_after)
+        message = "证书服务暂时限制了同一域名的重复申请"
+        if readable:
+            message += f"，预计可在 {readable} 后重试"
+    elif "timeout" in logs.lower() or "connection refused" in logs.lower():
+        message = "证书服务无法从公网连到本机的 80/443 端口"
+    elif "dns" in logs.lower() or "no such host" in logs.lower():
+        message = "证书服务检查域名时发现 DNS 尚未生效"
+    save_state(layout, state, "WAITING_FOR_CERTIFICATE", message + (f"；{last_error}" if last_error else ""))
+    print("\n安装已安全暂停")
+    print(f"原因：{message}")
+    print("Copper 不会把没有可信证书的站点标记为安装完成，也不会让你改用不安全的 HTTP 登录。")
+    print("\n可以选择：")
+    print("  1. 等待后运行：sudo copper-install continue")
+    print("  2. 准备好新域名后运行：sudo copper-install change-domain")
+    print("  3. 查看当前状态：sudo copper-install status")
+    return False
+
+
+def finalize_install(root: pathlib.Path, layout: Layout, state: dict[str, Any]) -> None:
+    verify_completed_installation(layout, root, state)
+    admin = run([str(root / "copperctl"), "admin", "init"], cwd=root, capture=True, check=False)
+    if admin.returncode != 0:
+        raise InstallerError("系统已运行，但首次管理员凭据没有安全生成；请运行 sudo copperctl doctor")
+    state.pop("lifecycleStatus", None)
+    save_state(layout, state, "COMPLETE")
+    report = {
+        "format": "copper-guided-install-report/v1",
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "result": "INSTALLED",
+        "installerVersion": INSTALLER_VERSION,
+        "siteId": state["siteId"],
+        "releaseVersion": state["releaseVersion"],
+        "domain": state["domain"],
+        "completedAt": now_iso(),
+        "nextActions": ["claim-initial-admin", "change-password", "register-backup-key", "create-and-verify-backup"],
+    }
+    write_json(layout.state_dir / "install-report.json", report)
+    print("\nCopper 安装完成，但还需要完成首次登录和数据保护")
+    print(f"访问地址：https://{state['domain']}")
+    print("\n请按顺序完成：")
+    print("  1. 在这台服务器运行 sudo copper-maintain，选择“首次管理员登录”。")
+    print("  2. 打开登录地址，使用一次性密码登录、改密，再用新密码重新登录。")
+    print("  3. 回到 Mac 安装介质运行 ./copper-manage-from-mac，选择“完成数据保护”。")
+    print("\n不要截图、发群或把一次性密码和恢复私钥复制到聊天。")
+    print("完成首次备份和离线验证前，系统显示“可恢复性未完成”属于正常提醒。")
+
+
+def secure_control_json(path: pathlib.Path, label: str) -> dict[str, Any]:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise InstallerError(f"缺少{label}：{path}") from error
+    if path.is_symlink() or not path.is_file() or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+        raise InstallerError(f"{label}的属主或权限不安全：{path}")
+    if metadata.st_size > 2 * 1024 * 1024:
+        raise InstallerError(f"{label}异常过大：{path}")
+    return read_json(path)
+
+
+def backup_directory(layout: Layout) -> pathlib.Path:
+    values = parse_env(layout.env_file)
+    value = values.get("COPPER_BACKUP_DIR", "/var/backups/copper")
+    directory = pathlib.Path(value)
+    if layout.etc_dir == pathlib.Path("/etc/copper"):
+        if directory != pathlib.Path("/var/backups/copper"):
+            raise InstallerError("正式站点的备份目录不符合安全边界")
+    elif not directory.is_absolute():
+        raise InstallerError("测试站点的备份目录必须是绝对路径")
+    return directory
+
+
+def validate_removal_proof(
+    layout: Layout,
+    state: dict[str, Any],
+    *,
+    site_id: str,
+    backup_id: str,
+    backup_sha256: str,
+    receipt_sha256: str,
+) -> dict[str, Any]:
+    if state.get("phase") != "COMPLETE" or state.get("siteId") != site_id:
+        raise InstallerError("只有安装完成且站点代号完全匹配时才能进入彻底移除")
+    environment = parse_env(layout.env_file)
+    if environment.get("COPPER_SITE_ID") != site_id:
+        raise InstallerError("当前配置中的站点代号与卸载请求不一致")
+    if not BACKUP_ID_RE.fullmatch(backup_id) or not SHA256_RE.fullmatch(backup_sha256) or not SHA256_RE.fullmatch(receipt_sha256):
+        raise InstallerError("卸载备份或离线回执摘要格式不正确")
+    backup_dir = backup_directory(layout)
+    last_success = secure_control_json(backup_dir / "last-success.json", "最近成功备份记录")
+    if (
+        last_success.get("formatVersion") != "copper-backup/v1"
+        or last_success.get("backupId") != backup_id
+        or last_success.get("sha256") != backup_sha256
+    ):
+        raise InstallerError("本次卸载证明不是服务器最近一次成功整站备份")
+    archive_name = str(last_success.get("archive") or "")
+    if pathlib.PurePosixPath(archive_name).name != archive_name or not archive_name.startswith(site_id + "_"):
+        raise InstallerError("最近成功备份文件名与当前站点不一致")
+    archive = backup_dir / archive_name
+    sidecar = backup_dir / f"{archive_name}.sha256"
+    if archive.is_symlink() or not archive.is_file() or sidecar.is_symlink() or not sidecar.is_file():
+        raise InstallerError("最近成功整站备份或其校验文件不存在")
+    if last_success.get("size") != archive.stat().st_size or sha256_file(archive) != backup_sha256:
+        raise InstallerError("服务器整站备份与卸载证明的 SHA-256 不一致")
+    try:
+        sidecar_lines = sidecar.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise InstallerError("无法读取整站备份校验文件") from error
+    if sidecar_lines != [f"{backup_sha256}  {archive_name}"]:
+        raise InstallerError("整站备份校验文件内容不正确")
+
+    registry = secure_control_json(layout.var_dir / "backup-keys/registry.json", "客户恢复密钥登记簿")
+    if registry.get("formatVersion") != "copper-key-registry/v1":
+        raise InstallerError("客户恢复密钥登记簿版本不受支持")
+    active_key_id = str(registry.get("activeKeyId") or "")
+    keys = registry.get("keys")
+    key_items = keys if isinstance(keys, list) else []
+    active = next(
+        (
+            item
+            for item in key_items
+            if isinstance(item, dict) and item.get("keyId") == active_key_id and item.get("status") == "ACTIVE"
+        ),
+        None,
+    )
+    if active is None:
+        raise InstallerError("客户恢复密钥登记簿没有可用的活动密钥")
+    tests = active.get("restoreTests") if isinstance(active.get("restoreTests"), list) else []
+    matched = any(
+        isinstance(item, dict)
+        and item.get("backupId") == backup_id
+        and item.get("backupSha256") == backup_sha256
+        and item.get("receiptSha256") == receipt_sha256
+        for item in tests
+    )
+    if not matched:
+        raise InstallerError("服务器没有登记本次整站备份的客户离线验证回执")
+    return {
+        "backupId": backup_id,
+        "backupSha256": backup_sha256,
+        "receiptSha256": receipt_sha256,
+        "archive": archive_name,
+        "completedAt": str(last_success.get("completedAt") or ""),
+        "keyId": active_key_id,
+        "backupDirectory": str(backup_dir),
+        "restoreRoot": environment.get("COPPER_RESTORE_ROOT", "/var/lib/copper-restores"),
+    }
+
+
+def require_site_stopped(layout: Layout, root: pathlib.Path) -> None:
+    project = parse_env(layout.env_file).get("COPPER_PROJECT_NAME", "copper")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", project):
+        raise InstallerError("当前 Copper 容器组名称不安全，拒绝进入彻底移除")
+    result = run(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--format",
+            "{{.Names}}",
+        ],
+        cwd=root,
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise InstallerError("无法确认 Copper 是否已经停止，拒绝进入彻底移除")
+    running = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    if running:
+        raise InstallerError(
+            "Copper 仍在运行，备份后仍可能产生新数据",
+            next_step="请从 Mac 管理向导执行彻底移除；向导会先完成新备份，再自动停止站点。",
+        )
+
+
+def copper_image_ids(layout: Layout, root: pathlib.Path) -> list[str]:
+    values = parse_env(layout.env_file)
+    identifiers: set[str] = set()
+    for name in ("COPPER_WEB_IMAGE", "COPPER_BACKEND_IMAGE", "COPPER_MYSQL_IMAGE"):
+        value = values.get(name, "")
+        if value:
+            result = run(["docker", "image", "inspect", "--format", "{{.Id}}", value], cwd=root, capture=True, check=False)
+            if result.returncode == 0 and SHA256_RE.fullmatch((result.stdout or "").strip().removeprefix("sha256:")):
+                identifiers.add((result.stdout or "").strip())
+    listed = run(["docker", "image", "ls", "--format", "{{.Repository}} {{.ID}}"], capture=True, check=False)
+    for line in (listed.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and re.fullmatch(r"ghcr\.io/soyia/copper_(?:web|backend|mysql)", parts[0]):
+            identifiers.add(parts[1])
+    return sorted(identifiers)
+
+
+def finalize_site_removal(layout: Layout, document: dict[str, Any]) -> None:
+    root = pathlib.Path(str(document.get("releaseRoot") or ""))
+    if root.parent != layout.releases_dir or root == layout.releases_dir:
+        raise InstallerError("卸载记录中的程序目录不安全，拒绝继续清理")
+    for image in document.get("imageIds", []):
+        if isinstance(image, str) and re.fullmatch(r"(?:sha256:)?[0-9a-f]{12,64}", image):
+            run(["docker", "image", "rm", image], check=False, capture=True)
+    for link, expected in (
+        (layout.command_link, root / "copper-install"),
+        (layout.copperctl_link, root / "copperctl"),
+        (layout.maintenance_link, root / "copper-maintain"),
+    ):
+        if link.is_symlink():
+            if link.resolve(strict=False) != expected.resolve(strict=False):
+                raise InstallerError(f"系统入口已指向其他程序，拒绝删除：{link}")
+            link.unlink()
+        elif link.exists():
+            raise InstallerError(f"系统入口不是 Copper 管理的链接，拒绝删除：{link}")
+    product_root = layout.releases_dir.parent
+    if product_root.exists():
+        shutil.rmtree(product_root)
+    for raw in (
+        str(layout.etc_dir),
+        str(layout.var_dir),
+        str(document.get("backupDirectory") or ""),
+        str(document.get("restoreRoot") or ""),
+    ):
+        if not raw:
+            continue
+        path = pathlib.Path(raw)
+        if path.exists() or path.is_symlink():
+            raise InstallerError(f"数据永久删除后仍发现残留：{path}")
+    state_dir = layout.state_dir
+    if state_dir.exists():
+        shutil.rmtree(state_dir)
+
+
+def command_uninstall_preserve(layout: Layout) -> int:
+    require_operator_root()
+    if not layout.state_file.exists() or not layout.env_file.exists():
+        raise InstallerError("没有找到可安全卸载的受管站点")
+    state = read_json(layout.state_file)
+    validate_state(state)
+    root = release_root(layout, state)
+    if state.get("phase") != "COMPLETE" or not (root / "copperctl").is_file():
+        raise InstallerError("站点尚未完整安装，不能执行普通卸载")
+    print("普通卸载会停止并移除服务，但保留数据库、图片、配置、密钥和备份。")
+    if not sys.stdin.isatty() or input(f'请输入 "UNINSTALL {state["siteId"]}" 继续：').strip() != f"UNINSTALL {state['siteId']}":
+        raise InstallerError("没有确认保留数据卸载，站点未改变", exit_code=2)
+    run([str(root / "copperctl"), "uninstall"], cwd=root)
+    if not layout.env_file.is_file() or not layout.var_dir.is_dir() or not layout.command_link.is_symlink():
+        raise InstallerError("普通卸载没有完整保留配置、数据或重装入口")
+    state["lifecycleStatus"] = "UNINSTALLED_DATA_PRESERVED"
+    state["updatedAt"] = now_iso()
+    write_json(layout.state_file, state)
+    print("Copper 已停止使用；数据库、图片、密钥和备份均已保留。")
+    print("需要重新启用时运行 sudo copper-install repair，或在 Mac 管理入口选择重新启用。")
+    return 0
+
+
+def command_remove_site(layout: Layout, args: argparse.Namespace) -> int:
+    require_operator_root()
+    requested = {
+        "siteId": args.site_id,
+        "backupId": args.backup_id,
+        "backupSha256": args.backup_sha256,
+        "receiptSha256": args.receipt_sha256,
+    }
+    if layout.removal_file.exists():
+        existing = secure_control_json(layout.removal_file, "卸载进度记录")
+        if existing.get("format") != REMOVAL_FORMAT or any(existing.get(key) != value for key, value in requested.items()):
+            raise InstallerError("检测到另一份未完成的卸载记录，拒绝混用")
+        phase = existing.get("phase")
+        if phase == "DATA_DELETED" or (not layout.env_file.exists() and not layout.var_dir.exists()):
+            finalize_site_removal(layout, existing)
+            print(f"Copper 站点 {args.site_id} 的残留清理已继续完成。")
+            return 0
+        if phase == "AUTHORIZED":
+            root = pathlib.Path(str(existing.get("releaseRoot") or ""))
+            if root.parent != layout.releases_dir or not (root / "scripts/permanently-delete-data.sh").is_file():
+                raise InstallerError("未完成卸载记录中的程序目录不安全")
+            require_site_stopped(layout, root)
+            print("检测到已确认但未完成的彻底移除，将从安全检查点继续。")
+            result = run(
+                [str(root / "scripts/permanently-delete-data.sh"), "--site-id", args.site_id],
+                cwd=root,
+                capture=True,
+                check=False,
+                input_text=f"DELETE {args.site_id}\n",
+            )
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.returncode != 0:
+                raise InstallerError("永久删除脚本仍未完成；请保持站点停止并使用同一条命令重试")
+            existing["phase"] = "DATA_DELETED"
+            existing["dataDeletedAt"] = now_iso()
+            write_json(layout.removal_file, existing)
+            finalize_site_removal(layout, existing)
+            print(f"Copper 站点 {args.site_id} 的彻底移除已从安全检查点完成。")
+            return 0
+        raise InstallerError("未完成卸载记录的阶段不受支持，拒绝继续")
+    if not layout.state_file.exists() or not layout.plan_file.exists() or not layout.env_file.exists():
+        raise InstallerError("没有找到可执行备份后彻底移除的受管站点")
+    state = read_json(layout.state_file)
+    validate_state(state)
+    proof = validate_removal_proof(
+        layout,
+        state,
+        site_id=args.site_id,
+        backup_id=args.backup_id,
+        backup_sha256=args.backup_sha256,
+        receipt_sha256=args.receipt_sha256,
+    )
+    root = release_root(layout, state)
+    require_site_stopped(layout, root)
+    print("\n即将彻底移除当前 Copper 站点：")
+    print(f"  站点：{args.site_id}")
+    print(f"  已离线验证的整站备份：{proof['archive']}")
+    print(f"  备份 SHA-256：{args.backup_sha256}")
+    print("  将删除：数据库、图片、配置、服务器本地备份、容器、Copper 镜像、服务和安装程序。")
+    print("  不会删除：客户电脑/外接盘备份、客户恢复私钥、Ubuntu、Docker、SSH 和 DNS。")
+    expected = f"DELETE {args.site_id}"
+    if not sys.stdin.isatty() or input(f'请输入 "{expected}" 继续：').strip() != expected:
+        raise InstallerError("没有确认彻底移除，站点未改变", exit_code=2)
+    document = {
+        "format": REMOVAL_FORMAT,
+        "status": "INTERNAL_REHEARSAL_ONLY",
+        "phase": "AUTHORIZED",
+        **requested,
+        **proof,
+        "releaseRoot": str(root),
+        "imageIds": copper_image_ids(layout, root),
+        "authorizedAt": now_iso(),
+    }
+    write_json(layout.removal_file, document)
+    result = run(
+        [str(root / "scripts/permanently-delete-data.sh"), "--site-id", args.site_id],
+        cwd=root,
+        capture=True,
+        check=False,
+        input_text=expected + "\n",
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.returncode != 0:
+        raise InstallerError("永久删除脚本未完成；修正后使用同一份备份证明重试")
+    document["phase"] = "DATA_DELETED"
+    document["dataDeletedAt"] = now_iso()
+    write_json(layout.removal_file, document)
+    finalize_site_removal(layout, document)
+    print(f"Copper 站点 {args.site_id} 已彻底移除，服务器端客户数据和安装程序均已清理。")
+    return 0
+
+
+def apply_plan(layout: Layout, media_root: pathlib.Path, values: dict[str, str], plan: dict[str, Any], answers: dict[str, str], state: dict[str, Any], *, repair: bool = False) -> int:
+    root = release_root(layout, state)
+    repair_site_stopped = False
+    try:
+        if repair or phase_index(str(state["phase"])) < phase_index("RELEASE_READY"):
+            root = extract_release(layout, media_root, values, state)
+            ensure_command_link(layout, root)
+            ensure_maintenance_link(layout, root)
+            save_state(layout, state, "RELEASE_READY")
+        else:
+            if not (root / "copperctl").is_file():
+                raise InstallerError("安装记录存在，但产品程序目录缺失")
+            ensure_command_link(layout, root)
+            ensure_maintenance_link(layout, root)
+
+        if repair:
+            print("正在暂时停止当前站点，以便安全检查端口和运行环境；修复完成后会自动启动。")
+            stopped = run([str(root / "copperctl"), "stop"], cwd=root, check=False)
+            repair_site_stopped = stopped.returncode == 0
+
+        if repair or phase_index(str(state["phase"])) < phase_index("RUNTIME_TOOLS_READY"):
+            print("正在准备服务器运行环境；首次执行可能需要几分钟……")
+            run([str(root / "scripts/bootstrap-ubuntu.sh")], cwd=root)
+            run([str(root / "copperctl"), "host", "preflight", "--json"], cwd=root)
+            save_state(layout, state, "RUNTIME_TOOLS_READY")
+
+        if repair or phase_index(str(state["phase"])) < phase_index("IMAGES_READY"):
+            load_images(media_root, values)
+            save_state(layout, state, "IMAGES_READY")
+
+        if repair or phase_index(str(state["phase"])) < phase_index("CONFIG_READY"):
+            ensure_configuration(layout, root, plan, values, answers, media_root)
+            save_state(layout, state, "CONFIG_READY")
+
+        if repair or phase_index(str(state["phase"])) < phase_index("SERVICES_READY"):
+            print("正在启动 Copper 并检查数据库、后台和网页服务……")
+            run([str(root / "copperctl"), "install"], cwd=root)
+            save_state(layout, state, "SERVICES_READY")
+
+        if not wait_for_https(str(state["domain"]), root, state, layout, 180):
+            return 4
+        finalize_install(root, layout, state)
+        return 0
+    except (InstallerError, subprocess.CalledProcessError) as error:
+        if repair_site_stopped:
+            print("修复没有完成，正在恢复原站点服务……")
+            run([str(root / "copperctl"), "up"], cwd=root, check=False)
+        message = str(error)
+        if isinstance(error, subprocess.CalledProcessError):
+            message = f"自动步骤执行失败：{' '.join(error.cmd)}"
+        save_state(layout, state, error=message)
+        if isinstance(error, InstallerError):
+            raise
+        raise InstallerError(message, next_step="修正屏幕上最后一个失败原因后，运行 sudo copper-install continue。") from error
+
+
+def command_status(layout: Layout) -> int:
+    require_operator_root()
+    if not layout.state_file.exists():
+        print("尚未发现由 Copper 安装器管理的安装记录。")
+        return 1
+    state = read_json(layout.state_file)
+    validate_state(state)
+    labels = {
+        "PLAN_CONFIRMED": "安装信息已确认",
+        "RELEASE_READY": "程序文件已准备",
+        "RUNTIME_TOOLS_READY": "服务器运行环境已准备",
+        "IMAGES_READY": "运行文件已准备",
+        "CONFIG_READY": "站点配置已生成",
+        "SERVICES_READY": "服务已启动，等待证书",
+        "WAITING_FOR_CERTIFICATE": "等待安全访问证书",
+        "COMPLETE": "安装完成",
+    }
+    print("Copper 安装状态")
+    print(f"  版本：{state.get('releaseVersion', '未知')}")
+    print(f"  域名：{state.get('domain', '未知')}")
+    print(f"  进度：{labels.get(str(state.get('phase')), str(state.get('phase')))}")
+    if state.get("lifecycleStatus") == "UNINSTALLED_DATA_PRESERVED":
+        print("  当前状态：已停止使用，数据仍完整保留")
+        print("  下一步：sudo copper-install repair 重新启用")
+        return 0
+    if state.get("certificateRetryAfter"):
+        print(f"  建议重试时间：{format_retry_time(str(state['certificateRetryAfter']))}")
+    if state.get("lastError"):
+        print(f"  最近提示：{state['lastError']}")
+    phase = state.get("phase")
+    if phase == "WAITING_FOR_CERTIFICATE":
+        print("  下一步：sudo copper-install continue，或 sudo copper-install change-domain")
+    elif phase == "COMPLETE":
+        print("  服务器维护入口：sudo copper-maintain")
+        print("  Mac 数据保护入口：安装介质中的 ./copper-manage-from-mac")
+        print("  同版本修复或换域名：sudo copper-install repair / change-domain")
+    else:
+        print("  下一步：sudo copper-install continue")
+    return 0
+
+
+def answers_from_plan(plan: dict[str, Any], layout: Layout) -> dict[str, str]:
+    existing = parse_env(layout.env_file) if layout.env_file.exists() else {}
+    recipient = str(plan.get("backupPublicKey") or existing.get("COPPER_BACKUP_AGE_RECIPIENT", ""))
+    if not recipient:
+        raise InstallerError("安装记录未保存备份公钥本体，且现有配置中也找不到公钥")
+    return {
+        "siteId": str(plan["siteId"]),
+        "domain": str(plan["domain"]),
+        "publicIp": str(plan["publicIpv4"]),
+        "backupPublicKey": validate_backup_public_key(recipient),
+        "timeZone": str(plan.get("timeZone", "Asia/Shanghai")),
+    }
+
+
+def command_continue(layout: Layout, args: argparse.Namespace, *, repair: bool = False) -> int:
+    require_operator_root()
+    if not layout.state_file.exists() or not layout.plan_file.exists():
+        raise InstallerError("没有可继续的安装记录；请从完整介质运行 sudo ./copper-install")
+    state = read_json(layout.state_file)
+    plan = read_json(layout.plan_file)
+    validate_state(state)
+    if plan.get("format") != PLAN_FORMAT or state.get("planSha256") != plan_digest(plan):
+        raise InstallerError("安装计划与记录不一致；请不要手工修改这些文件")
+    root = release_root(layout, state)
+    if state.get("phase") == "COMPLETE" and not repair:
+        verify_completed_installation(layout, root, state)
+        print("Copper 已安装完成，无需重复安装。需要修复时运行 sudo copper-install repair。")
+        return 0
+    retry_after = str(state.get("certificateRetryAfter") or "")
+    if state.get("phase") == "WAITING_FOR_CERTIFICATE" and retry_after and not repair:
+        try:
+            instant = dt.datetime.fromisoformat(retry_after.replace("Z", "+00:00").replace(" ", "T", 1))
+            if instant.tzinfo is None:
+                instant = instant.replace(tzinfo=dt.timezone.utc)
+            if instant > dt.datetime.now(dt.timezone.utc):
+                ready, _ = https_ready(str(state["domain"]))
+                if not ready:
+                    print(f"证书服务建议在 {format_retry_time(retry_after)} 后再试；现在不会重复申请。")
+                    print("也可以准备另一个已解析到本机的域名，然后运行 sudo copper-install change-domain。")
+                    return 4
+        except ValueError:
+            pass
+    media_root = media_directory(args.media_dir, layout)
+    values = parse_env(media_root / "OPERATOR_VALUES.env")
+    require_media_values(values)
+    if values["COPPER_RELEASE_VERSION"] != state.get("releaseVersion") or values["COPPER_DEPLOY_COMMIT"] != state.get("deployCommit"):
+        raise InstallerError("当前介质与正在继续的安装版本不一致")
+    verify_media(media_root, values)
+    answers = answers_from_plan(plan, layout)
+    validate_dns_with_choices(answers, interactive=sys.stdin.isatty() and not args.yes)
+    return apply_plan(layout, media_root, values, plan, answers, state, repair=repair)
+
+
+def command_change_domain(layout: Layout, args: argparse.Namespace) -> int:
+    require_operator_root()
+    if args.yes and not args.answers:
+        raise InstallerError("--yes 只能与 --answers 一起使用，避免跳过人工确认")
+    if not layout.state_file.exists() or not layout.plan_file.exists() or not layout.env_file.exists():
+        raise InstallerError("没有找到可维护的 Copper 安装；请先完成或开始一次受管安装")
+    state = read_json(layout.state_file)
+    plan = read_json(layout.plan_file)
+    validate_state(state)
+    old_domain = str(state["domain"])
+    old_public_ip = str(state["publicIpv4"])
+    old_plan = copy.deepcopy(plan)
+    old_phase = str(state["phase"])
+    supplied = read_json(pathlib.Path(args.answers).expanduser().resolve()) if args.answers else {}
+    new_domain = normalize_domain(str(supplied.get("domain") or prompt("新的访问地址")))
+    new_public_ip = normalize_public_ipv4(str(supplied.get("publicIp") or prompt("这台服务器的公网 IPv4 地址", old_public_ip)))
+    if new_domain == old_domain:
+        raise InstallerError("新域名与当前域名相同，无需修改", exit_code=2)
+    if tls_mode_for_address(old_domain) == "ip" or tls_mode_for_address(new_domain) == "ip":
+        raise InstallerError("当前版本不支持公网 IP 地址变更或域名/IP 模式迁移；原配置和证书保持不变")
+    changed_answers = {
+        "domain": new_domain,
+        "publicIp": new_public_ip,
+        "siteId": str(state["siteId"]),
+        "backupPublicKey": parse_env(layout.env_file).get("COPPER_BACKUP_AGE_RECIPIENT", ""),
+        "timeZone": str(plan.get("timeZone", "Asia/Shanghai")),
+    }
+    dns = validate_dns_with_choices(changed_answers, interactive=sys.stdin.isatty() and not args.yes)
+    new_domain = changed_answers["domain"]
+    new_public_ip = changed_answers["publicIp"]
+    print(f"\n将访问地址从 https://{old_domain} 改为 https://{new_domain}")
+    if not args.yes:
+        expected = f"CHANGE {new_domain}"
+        if input(f"确认 DNS 已核对，请输入 {expected}：").strip() != expected:
+            raise InstallerError("未确认更换域名，配置没有改变", exit_code=2)
+    old_https_ready, _ = https_ready(old_domain)
+    original = layout.env_file.read_text(encoding="utf-8")
+    backup = layout.etc_dir / f"copper.env.before-domain-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    atomic_write(backup, original, 0o600)
+    atomic_write(layout.env_file, replace_environment_value(original, "COPPER_DOMAIN", new_domain), 0o600)
+    plan["domain"] = new_domain
+    plan["publicIpv4"] = new_public_ip
+    plan["dns"] = dns
+    state["domain"] = new_domain
+    state["publicIpv4"] = new_public_ip
+    state["planSha256"] = plan_digest(plan)
+    write_json(layout.plan_file, plan)
+    root = release_root(layout, state)
+    change_error = ""
+    changed = False
+    try:
+        run([str(root / "copperctl"), "restart"], cwd=root)
+        save_state(layout, state, "SERVICES_READY")
+        changed = wait_for_https(new_domain, root, state, layout, 180)
+    except subprocess.CalledProcessError as error:
+        change_error = f"切换到新域名时服务重启失败：{' '.join(error.cmd)}"
+    if changed:
+        finalize_install(root, layout, state)
+        print(f"原配置备份保存在 {backup}")
+        return 0
+    if old_https_ready:
+        print("新域名没有取得可信证书；为了保持原站点可用，正在恢复旧域名……")
+        atomic_write(layout.env_file, original, 0o600)
+        plan = old_plan
+        state["domain"] = old_domain
+        state["publicIpv4"] = old_public_ip
+        state["certificateRetryAfter"] = ""
+        state["planSha256"] = plan_digest(plan)
+        write_json(layout.plan_file, plan)
+        try:
+            run([str(root / "copperctl"), "restart"], cwd=root)
+        except subprocess.CalledProcessError as error:
+            save_state(layout, state, error="恢复旧域名时服务重启失败")
+            raise InstallerError("恢复旧域名时服务重启失败，请运行 sudo copperctl doctor") from error
+        if not https_ready(old_domain)[0]:
+            raise InstallerError("恢复旧域名后安全访问仍未恢复，请运行 sudo copperctl doctor")
+        save_state(layout, state, "COMPLETE", "新域名证书失败，已自动恢复旧域名")
+        print(f"已恢复 https://{old_domain}；新域名未生效。")
+    elif change_error:
+        save_state(layout, state, old_phase, change_error)
+        raise InstallerError(change_error, next_step="修正服务问题后运行 sudo copper-install continue。")
+    return 4
+
+
+def command_install(layout: Layout, args: argparse.Namespace) -> int:
+    require_operator_root()
+    if args.yes and not args.answers:
+        raise InstallerError("--yes 只能与 --answers 一起使用，避免跳过人工确认")
+    existing = existing_environment(layout)
+    media_root = media_directory(args.media_dir, layout)
+    values = parse_env(media_root / "OPERATOR_VALUES.env")
+    require_media_values(values)
+    verify_media(media_root, values)
+    if existing and existing.get("COPPER_RELEASE_VERSION") != values["COPPER_RELEASE_VERSION"]:
+        raise InstallerError(
+            f"已安装 {existing.get('COPPER_RELEASE_VERSION')}，当前介质是 {values['COPPER_RELEASE_VERSION']}",
+            next_step="不同版本请使用受支持的升级流程；本安装器不会把升级当成重装。",
+        )
+    if layout.state_file.exists():
+        if not layout.plan_file.exists():
+            raise InstallerError("检测到残缺的安装记录；安装器拒绝猜测或覆盖")
+        state = read_json(layout.state_file)
+        plan = read_json(layout.plan_file)
+        validate_managed_request(layout, state, plan, values, args.answers)
+        print("检测到与本次站点、版本和介质一致的受管安装，将使用已有安装记录。")
+        return command_continue(layout, args)
+    facts = environment_precheck(layout, managed_existing=bool(existing))
+    answers = collect_answers(args, existing)
+    dns = validate_dns_with_choices(answers, interactive=sys.stdin.isatty() and not args.yes)
+    plan = plan_document(answers, values, dns, "same-version-repair" if existing else "fresh-install")
+    show_plan(plan, facts)
+    if args.dry_run:
+        print("\n检查通过。--dry-run 未写入配置、未安装 Docker、未启动服务。")
+        return 0
+    confirm_plan(plan, args)
+    state = initial_state(plan, media_root)
+    write_json(layout.plan_file, plan)
+    save_state(layout, state)
+    return apply_plan(layout, media_root, values, plan, answers, state, repair=bool(existing))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="copper-install",
+        description="Copper 一站式安装和维护入口（内部演练）",
+        epilog="普通卸载保留账套数据；彻底移除必须绑定客户离线验证的最新整站备份并单独确认。",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    install = subparsers.add_parser("install", help="从完整介质开始安装（默认）")
+    continuing = subparsers.add_parser("continue", help="继续上次暂停的安装")
+    repair = subparsers.add_parser("repair", help="修复同一版本，保留数据和密钥")
+    change_domain = subparsers.add_parser("change-domain", help="核对 DNS 后更换访问域名")
+    subparsers.add_parser("status", help="查看安装进度和下一步")
+    subparsers.add_parser("uninstall", help="停止使用并保留数据库、图片、密钥和备份")
+    removal = subparsers.add_parser("remove-site", help="绑定已离线验证的整站备份后彻底移除站点")
+    removal.add_argument("--site-id", required=True)
+    removal.add_argument("--backup-id", required=True)
+    removal.add_argument("--backup-sha256", required=True)
+    removal.add_argument("--receipt-sha256", required=True)
+    for item in (install, continuing, repair, change_domain):
+        item.add_argument("--media-dir", help="完整安装介质目录")
+        item.add_argument("--answers", help="安装信息 JSON；用于可重复验收")
+        item.add_argument("--yes", action="store_true", help="与 --answers 同用，接受显示的计划")
+    install.add_argument("--dry-run", action="store_true", help="只检查，不写入或启动")
+    return parser
+
+
+def normalize_default_command(argv: list[str]) -> list[str]:
+    commands = {"install", "continue", "repair", "change-domain", "status", "uninstall", "remove-site", "-h", "--help"}
+    if not argv or argv[0] not in commands:
+        return ["install", *argv]
+    return argv
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(normalize_default_command(list(argv if argv is not None else sys.argv[1:])))
+    layout = layout_from_environment()
+    try:
+        command = args.command or "install"
+        if command == "status":
+            return command_status(layout)
+        if command == "continue":
+            return command_continue(layout, args)
+        if command == "repair":
+            return command_continue(layout, args, repair=True)
+        if command == "change-domain":
+            return command_change_domain(layout, args)
+        if command == "uninstall":
+            return command_uninstall_preserve(layout)
+        if command == "remove-site":
+            return command_remove_site(layout, args)
+        return command_install(layout, args)
+    except InstallerError as error:
+        print(f"\n安装已停止：{error}", file=sys.stderr)
+        if error.next_step:
+            print(f"下一步：{error.next_step}", file=sys.stderr)
+        if command == "remove-site":
+            print("如果已输入 DELETE，重新运行同一条 remove-site 命令会继续清理；不要手工扩大删除范围。", file=sys.stderr)
+        else:
+            print("已写入的安装记录、随机密钥和客户数据都会保留；不要手工删除 /etc/copper 或 /var/lib/copper。", file=sys.stderr)
+        return error.exit_code
+    except KeyboardInterrupt:
+        if command == "remove-site":
+            print("\n彻底移除已由操作者暂停；使用完全相同的 remove-site 命令可从安全检查点继续。", file=sys.stderr)
+        else:
+            print("\n安装已由操作者暂停。再次运行 sudo copper-install continue 即可继续。", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

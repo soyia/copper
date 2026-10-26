@@ -1,0 +1,101 @@
+{
+  "format": "copper-m6-07-x86-rehearsal/v1",
+  "generatedAt": "2026-07-16T22:02:39Z",
+  "purpose": "INTERNAL_REHEARSAL_ONLY",
+  "formalRelease": "FORMAL_RELEASE_BLOCKED",
+  "formalExit": false,
+  "formalBlockers": [
+    "M6-02_GITHUB_PLATFORM_PR_REFS",
+    "M6-03_FINAL_RIGHTS_LEDGER_SBOM_NOTICE",
+    "M6-05_IP_LAWYER_WRITTEN_REVIEW",
+    "M6-06_PUBLIC_ANONYMOUS_REPRODUCTION",
+    "M6-07_INDEPENDENT_BLANK_HOST",
+    "M6-07_OFFLINE_DEPENDENCY_MEDIA"
+  ],
+  "candidate": {
+    "version": "0.4.0-rc.2",
+    "manifest": "releases/0.4.0-rc.2/copper-source-rehearsal-0.4.0-rc.2.env",
+    "sourceBundleSha256": "2b29fd5343c88c49402ded570a3cbe4adb498703d9439a4b27612c9a65826ec6",
+    "sourceBundleDeterministic": true,
+    "sourceBundleOfflineVerification": "PASS",
+    "repositoryCloneReportSha256": "2d4f2c83512bc670cc99198eb0489921c07f3617948d62caab1d71f03b9a0228",
+    "threeRepositoryStrictAuditSha256": "7f06ca3155e4d5e19e9183af614b59d27b9e62d5a2d2ecf147a4ae41895a9334",
+    "repositories": {
+      "web": "af6ef0536bc12e4b85577f729b1925f2cde12f7f",
+      "backend": "f32e6aec06fa730f777c1bc3761fed9d33540b22",
+      "deploy": "236e96072aeafcc6aa44e060a7f2b58e587915d9"
+    },
+    "schema": 5,
+    "migrationSetSha256": "2c10750857bdedac07d0d91646ade44863d056cf48735d8db3ee97e3cf50035c"
+  },
+  "webImage": {
+    "workflowRun": 29534653438,
+    "workflowConclusion": "success",
+    "artifactDigest": "sha256:dd571bb0a12da15866bac7023d3a31eb4dc7dd9c3b69798899cc8b7c8b4b45d5",
+    "multiArchitectureDigest": "sha256:cb79d7de6ec15cb707ae329638323fe4f3f1e79625ee48c7da348727be0f67ff",
+    "amd64Digest": "sha256:39c38e141cf383c1aa1098772ae99f32b460e4e7e65138952d96697567b46270",
+    "arm64Digest": "sha256:68eb51b51400d97a74bb41d288c320601b9a6294d6221b4fee8f6d40f657a955"
+  },
+  "host": {
+    "os": "Ubuntu 24.04.4 LTS",
+    "architecture": "x86_64",
+    "cpu": 2,
+    "memoryKiB": 8005644,
+    "diskBytes": 50884108288,
+    "freeDiskBytesBeforeCleanup": 30775152640,
+    "independentBlankHost": false,
+    "isolation": "DEDICATED_COMPOSE_PROJECT_AND_PATHS_ON_SHARED_REHEARSAL_HOST"
+  },
+  "locallyBuiltImages": {
+    "web": "sha256:6c25306b1a18e95e605fb65af951f74d49cf1c1ceb7ba745a08138d9038a04de",
+    "backend": "sha256:141ed4d539bb3a243e068e6999221e0966a04e42767916cadf25d5a2e43494a2",
+    "mysql": "sha256:657af0b00b586e1addb406b927c25193af2888121571d4b589f20f56939569a3"
+  },
+  "checks": {
+    "authenticatedFreshClone": "PASS",
+    "threeRepositoryStrictAudit": "PASS_ZERO_FINDINGS",
+    "deterministicSourceBundle": "PASS",
+    "onlineSourceBuild": "PASS",
+    "offlineSourceBuild": "BLOCKED_MISSING_WEB_AND_MAVEN_DEPENDENCY_MEDIA",
+    "threeLayerHealth": "PASS",
+    "bootstrapCredentialDestroyed": "PASS",
+    "cookieSecurity": "PASS",
+    "coreMasterDataPersistence": "PASS",
+    "fullExportDownloadAndSha256": "PASS",
+    "encryptedBackupAndOfflineDecryption": "PASS",
+    "sideBySideRestore": "PASS_VALIDATED",
+    "restoredBusinessRows": "PASS_WAREHOUSE_1_PARTNER_1",
+    "wholeSiteRestart": "PASS",
+    "finalSecretAudit": "PASS_8_OF_8",
+    "testIdentityDestroyed": "PASS",
+    "restoreSidecarDestroyed": "PASS",
+    "testProjectCleanup": "PASS"
+  },
+  "runtimeEvidence": {
+    "exportId": "1a79b858-c0a3-464e-87b5-9a9ed500c375",
+    "exportSha256": "a5ad0bd96c427db43e2c243fe61238906e817dfb57f7cf627ba5a75da8de4fa1",
+    "backupId": "52bdc554929f6dc63e712ec74f6c56c2",
+    "backupSha256": "bd912805bb5f7fec31a5ee3be804596bc244ef7ce2acf4b023e0c116d06c80c3",
+    "restoreId": "m607-final",
+    "restoreStatus": "VALIDATED",
+    "secretAuditStatus": "PASS"
+  },
+  "failClosedEvidence": [
+    "domain_with_port_rejected_before_backup",
+    "mutable_local_image_tags_rejected_for_offline_delivery",
+    "temporary_compose_override_failed_to_restore_ports_and_was_replaced_by_supported_external_proxy_mode"
+  ],
+  "limitations": [
+    "The host already contained M5 and M6-04 projects, so this is not independent blank-host evidence.",
+    "The repositories were cloned with authenticated GitHub access, not anonymous public access.",
+    "Offline Web and Backend dependency media was incomplete; online source builds passed.",
+    "A disposable-test-only password reset repaired lost harness state after the original bootstrap change had already passed; it is not a customer recovery procedure.",
+    "No incremental AWS invoice or independent deployment-duration measurement was collected."
+  ],
+  "decision": {
+    "m6InternalRehearsal": "PASS",
+    "m6FormalExit": "NO",
+    "m7InternalRehearsalMayStart": true,
+    "publicReleaseOrCustomerDelivery": "PROHIBITED"
+  }
+}

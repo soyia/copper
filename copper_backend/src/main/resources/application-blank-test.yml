@@ -1,0 +1,50 @@
+# Local-only empty business database profile.
+# Start with: SPRING_PROFILES_ACTIVE=blank-test mvn spring-boot:run
+# Defaults are intentionally isolated from the normal 8191/copper_v2 environment.
+spring:
+  datasource:
+    url: ${COPPER_BLANK_TEST_DB_URL:jdbc:mysql://127.0.0.1:3307/copper_v2_blank_test?useSSL=false&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${COPPER_BLANK_TEST_DB_USERNAME:copper_blank}
+    password: ${COPPER_BLANK_TEST_DB_PASSWORD:}
+  servlet:
+    multipart:
+      location: ${COPPER_BLANK_TEST_UPLOAD_TEMP_PATH:${java.io.tmpdir}}
+  jackson:
+    time-zone: ${COPPER_BLANK_TEST_TIME_ZONE:Asia/Shanghai}
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+
+server:
+  port: ${COPPER_BLANK_TEST_PORT:8193}
+
+copper:
+  runtime:
+    data-root: ${COPPER_BLANK_TEST_DATA_ROOT:${user.dir}/data/blank-test/app}
+  file-storage:
+    root-path: ${COPPER_BLANK_TEST_FILE_STORAGE_PATH:${copper.runtime.data-root}/files}
+  export:
+    root-path: ${COPPER_BLANK_TEST_EXPORT_PATH:${copper.runtime.data-root}/exports}
+  storage:
+    capacity-file: ${COPPER_BLANK_TEST_STORAGE_CAPACITY_FILE:${copper.runtime.data-root}/runtime/storage-capacity.json}
+  ocr:
+    enabled: ${COPPER_BLANK_TEST_OCR_ENABLED:false}
+  bootstrap:
+    username: ${COPPER_BLANK_TEST_BOOTSTRAP_USERNAME:admin}
+    credential-file: ${COPPER_BLANK_TEST_BOOTSTRAP_CREDENTIAL_FILE:${copper.runtime.data-root}/secrets/initial-admin.txt}
+  security:
+    allowed-origins: ${COPPER_BLANK_TEST_ALLOWED_ORIGINS:http://127.0.0.1:8077,http://localhost:8077,http://127.0.0.1:8076,http://localhost:8076,http://127.0.0.1:5173,http://localhost:5173}
+    allow-private-network-origins: true
+    session:
+      hours: ${COPPER_BLANK_TEST_SESSION_HOURS:12}
+      max-active: ${COPPER_BLANK_TEST_MAX_ACTIVE_SESSIONS:5}
+    cookie:
+      secure: false
+      same-site: Lax
+
+logging:
+  file:
+    name: ${COPPER_BLANK_TEST_LOG_FILE:${java.io.tmpdir}/copper-blank-test-backend.log}
+  level:
+    root: ${COPPER_BLANK_TEST_LOG_LEVEL:INFO}
+    com.soyia.copperv2: ${COPPER_BLANK_TEST_LOG_LEVEL:INFO}

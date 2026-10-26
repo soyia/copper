@@ -1,0 +1,79 @@
+{
+  "decision": {
+    "decidedAt": "2026-07-18T21:14:01+08:00",
+    "decidedBy": "Tian",
+    "decisionRecord": "soyia/copper_web#76",
+    "formalReleaseStatus": "FORMAL_RELEASE_BLOCKED",
+    "internalAuditStatus": "COMPLETE",
+    "productOwnerDecision": "NO_GO",
+    "recommendation": "NO_GO",
+    "v1TagAllowed": false
+  },
+  "formalBlockers": [
+    "M7-02_ZERO_SUPPORT_SECOND_SAMPLE",
+    "M6-02_CURRENT_HISTORY_AND_GITHUB_PR_REFS",
+    "M6-03_CURRENT_SBOM_RIGHTS_NOTICE",
+    "M6-05_EXTERNAL_LEGAL_REVIEW_AND_GOVERNANCE",
+    "M6-06_ANONYMOUS_PUBLIC_REPRODUCTION",
+    "M6-07_EXACT_FINAL_CANDIDATE_AND_OFFLINE_BLANK_HOST",
+    "CURRENT_SECURITY_VULNERABILITY_EVIDENCE",
+    "FORMAL_ACCOUNTING_TAX_AND_CUSTOMER_HANDOVER",
+    "FORMAL_SUPPORT_AND_VERSION_LIFECYCLE"
+  ],
+  "formatVersion": "copper-m7-final-audit/v1",
+  "generatedAt": "2026-07-18T11:49:27Z",
+  "releaseState": {
+    "currentInternalCandidate": "0.4.0-rc.4",
+    "manifestMissingFields": [
+      "COPPER_RELEASE_MANIFEST_FORMAT",
+      "COPPER_DEPLOY_TAG",
+      "COPPER_DEPLOY_COMMIT",
+      "COPPER_UPGRADE_MATRIX_FILE",
+      "COPPER_UPGRADE_MATRIX_SHA256",
+      "COPPER_DEPLOY_ARCHIVE",
+      "COPPER_DEPLOY_ARCHIVE_SHA256",
+      "COPPER_RELEASE_NOTES_FILE"
+    ],
+    "manifestValidation": "FAIL",
+    "migrationSetSha256": "511b723efa03f54ad3b7ad21aa9605d82cffe39c6c2cf6b75e3e06a910da06c6",
+    "remoteTagCounts": {
+      "copper_backend": 0,
+      "copper_deploy": 0,
+      "copper_web": 0
+    },
+    "schemaVersion": 7,
+    "sourceAlignment": {
+      "backend": true,
+      "deploy": false,
+      "web": false
+    }
+  },
+  "repositories": {
+    "copper_backend": "f721efab70e31fd1e3448f508b9733e8112ea003",
+    "copper_deploy": "7dc281a83b0bf2ea78dca576f56e65d85d699c5d",
+    "copper_web": "1759b7bc08757777f5cc3c8c4dad94b7687e16cc"
+  },
+  "scope": "INTERNAL_REHEARSAL_ONLY",
+  "strictConfidentialityAudit": {
+    "currentTree": {
+      "blocking": 0,
+      "reportSha256": "3db51ef0d574db7248632f7571c386f432076b39b2ac8284ff6971725d900711",
+      "result": "PASS"
+    },
+    "ordinaryHistory": {
+      "blocking": 41,
+      "byCategory": {
+        "personal_information": 36,
+        "secret": 5
+      },
+      "byRepository": {
+        "copper_backend": 16,
+        "copper_deploy": 7,
+        "copper_web": 18
+      },
+      "reportSha256": "c0d83875bb8c7e707c6df5e356a8052ac93347387a55b00ca4dc346833c8deaf",
+      "result": "BLOCK"
+    },
+    "platformPullRequestRefs": "REENUMERATION_REQUIRED_AFTER_GITHUB_SUPPORT_DISPOSITION"
+  }
+}

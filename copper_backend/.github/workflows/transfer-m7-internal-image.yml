@@ -1,0 +1,235 @@
+name: Transfer Backend amd64 image for M7 internal rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: INTERNAL_REHEARSAL_ONLY Copper candidate version
+        required: true
+        default: source
+        type: string
+      transfer_draft_tag:
+        description: Existing private draft tag in the m7-internal-transfer namespace
+        required: true
+        type: string
+      transfer_draft_id:
+        description: Exact numeric ID of the existing private draft release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transfer-m7-backend-${{ github.ref }}-${{ inputs.transfer_draft_tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate private transfer and reviewed source
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out complete reviewed history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+
+      - name: Reject public or published transfer targets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          TRANSFER_TAG: ${{ inputs.transfer_draft_tag }}
+          TRANSFER_DRAFT_ID: ${{ inputs.transfer_draft_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] || {
+            echo "Transfer release version is invalid" >&2
+            exit 2
+          }
+          [[ "$TRANSFER_TAG" =~ ^m7-internal-transfer-[0-9A-Za-z._-]{1,96}$ ]] || {
+            echo "Private draft transfer tag is outside the controlled M7 namespace" >&2
+            exit 2
+          }
+          [[ "$TRANSFER_DRAFT_ID" =~ ^[0-9]+$ ]] || {
+            echo "Private draft release ID must be numeric" >&2
+            exit 2
+          }
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private')" == "true" ]] || {
+            echo "Internal transfer is forbidden for a public repository" >&2
+            exit 2
+          }
+
+      - name: Run strict confidentiality audit
+        run: |
+          set -Eeuo pipefail
+          node --test tests/m6-confidentiality-audit-identity.test.mjs
+          node scripts/security/audit-repositories.mjs \
+            --repo copper_backend=. \
+            --config config/m6-confidentiality-audit.json \
+            --gate strict \
+            --scope all \
+            --report "$RUNNER_TEMP/copper-backend-transfer-confidentiality-audit.json"
+
+      - name: Run Backend tests
+        run: |
+          set -Eeuo pipefail
+          java -version
+          mvn -version
+          mvn -B -ntp test
+
+  build-and-transfer:
+    name: Build and transfer native linux/amd64
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Validate controlled private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRANSFER_TAG: ${{ inputs.transfer_draft_tag }}
+          TRANSFER_DRAFT_ID: ${{ inputs.transfer_draft_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private')" == "true" ]] || {
+            echo "Internal transfer is forbidden for a public repository" >&2
+            exit 2
+          }
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID")"
+          [[ "$(jq -r '.draft' <<<"$release_json")" == "true" ]] || {
+            echo "Transfer target must be an existing private draft release" >&2
+            exit 2
+          }
+          [[ "$(jq -r '.tag_name' <<<"$release_json")" == "$TRANSFER_TAG" ]] || {
+            echo "Private draft release ID and tag do not identify the same target" >&2
+            exit 2
+          }
+
+      - name: Check out reviewed source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Resolve immutable build identity
+        id: release
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -Eeuo pipefail
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish native platform image
+        id: image
+        env:
+          CREATED: ${{ steps.release.outputs.created }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(uname -m)" == "x86_64" ]] || { echo "M7 transfer runner is not amd64" >&2; exit 1; }
+          docker buildx create --driver docker-container --name copper-builder --use
+          docker buildx inspect --bootstrap
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false \
+            --sbom=false \
+            --build-arg "COPPER_VERSION=$RELEASE_VERSION" \
+            --build-arg "COPPER_REVISION=$GITHUB_SHA" \
+            --build-arg "COPPER_BUILD_TIME=$CREATED" \
+            --tag "$IMAGE:sha-$GITHUB_SHA-amd64" \
+            --metadata-file /tmp/copper-image-metadata.json \
+            --push \
+            .
+          digest="$(jq -r '."containerimage.digest" // empty' /tmp/copper-image-metadata.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Build returned no immutable digest" >&2; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Export exact amd64 image and evidence
+        env:
+          CREATED: ${{ steps.release.outputs.created }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE: ${{ steps.release.outputs.image }}
+        run: |
+          set -Eeuo pipefail
+          root=/tmp/copper-backend-amd64
+          archive=copper-backend-amd64.tar.gz
+          delivery_tag="$IMAGE:m5-delivery-$GITHUB_SHA-amd64"
+          install -d -m 0700 "$root"
+          docker pull --platform linux/amd64 "$IMAGE@$DIGEST"
+          docker tag "$IMAGE@$DIGEST" "$delivery_tag"
+          local_id="$(docker image inspect --format '{{.Id}}' "$delivery_tag")"
+          [[ "$local_id" =~ ^sha256:[0-9a-f]{64}$ && "$(docker image inspect --format '{{.Architecture}}' "$delivery_tag")" == "amd64" ]] || {
+            echo "Exported image identity is not amd64" >&2
+            exit 1
+          }
+          docker save "$delivery_tag" | gzip -n > "$root/$archive"
+          archive_sha="$(sha256sum "$root/$archive" | awk '{print $1}')"
+          archive_bytes="$(stat --format '%s' "$root/$archive")"
+          jq -n \
+            --arg role backend \
+            --arg sourceRepository "$GITHUB_REPOSITORY" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg workflowRun "$GITHUB_RUN_ID" \
+            --arg workflowAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg createdAt "$CREATED" \
+            --arg imageRepository "$IMAGE" \
+            --arg platform linux/amd64 \
+            --arg platformDigest "$DIGEST" \
+            --arg localId "$local_id" \
+            --arg archiveName "$archive" \
+            --arg archiveSha256 "$archive_sha" \
+            --argjson archiveBytes "$archive_bytes" \
+            '{format:"copper-image-platform/v1",role:$role,sourceRepository:$sourceRepository,sourceCommit:$sourceCommit,workflowRun:$workflowRun,workflowAttempt:$workflowAttempt,createdAt:$createdAt,imageRepository:$imageRepository,platform:$platform,platformDigest:$platformDigest,localId:$localId,archive:{name:$archiveName,bytes:$archiveBytes,sha256:$archiveSha256}}' \
+            > "$root/image-platform-amd64.json"
+          (cd "$root" && sha256sum "$archive" image-platform-amd64.json > SHA256SUMS-amd64)
+
+      - name: Upload to the controlled private draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRANSFER_TAG: ${{ inputs.transfer_draft_tag }}
+          TRANSFER_DRAFT_ID: ${{ inputs.transfer_draft_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private')" == "true" ]] || exit 2
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID")"
+          [[ "$(jq -r '.draft' <<<"$release_json")" == "true" ]] || exit 2
+          [[ "$(jq -r '.tag_name' <<<"$release_json")" == "$TRANSFER_TAG" ]] || exit 2
+          root=/tmp/copper-backend-amd64
+          for file in \
+            "$root/copper-backend-amd64.tar.gz" \
+            "$root/image-platform-amd64.json" \
+            "$root/SHA256SUMS-amd64"; do
+            name="$(basename "$file")"
+            existing_id="$(
+              gh api "repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID/assets" |
+                jq -r --arg name "$name" 'first(.[] | select(.name == $name) | .id) // empty'
+            )"
+            if [[ -n "$existing_id" ]]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$existing_id"
+            fi
+            curl \
+              --fail-with-body \
+              --retry 3 \
+              --retry-all-errors \
+              --connect-timeout 15 \
+              --request POST \
+              --user "$GITHUB_ACTOR:$GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$TRANSFER_DRAFT_ID/assets?name=$name" \
+              >/dev/null
+          done
+
+      - name: Log out from GHCR
+        if: always()
+        run: docker logout ghcr.io || true

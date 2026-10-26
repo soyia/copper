@@ -1,0 +1,36 @@
+{
+  "format": "copper-native-logical-roundtrip/v1",
+  "status": "PASS",
+  "scope": "SUPPLEMENTAL_NATIVE_MYSQL_TEST_NOT_COMPOSE_OR_COPPER_BACKUP_V1",
+  "databaseVersion": "8.4.11",
+  "actualFlywayVersion": "68",
+  "tableCount": 256,
+  "rowCount": 3999,
+  "attachmentFileCount": 2,
+  "attachmentReferenceCount": 2,
+  "allRowContentSha256": "098eaed56067318d41615c2c3cbd9bceea0dcf0481e00dca6efe7038478a606a",
+  "encryptedTestArchiveSha256": "630ed3360987ac330f186847f76775d887e260eff26c67740dd93e59b78ea395",
+  "sourceForeignKeyCount": 92,
+  "restoredForeignKeyCount": 92,
+  "protectedCoreMappings": 78,
+  "foreignKeyOrphans": 0,
+  "v68SourceIdentity": {
+    "nextId": 1,
+    "highestReference": 0,
+    "uniqueIndexPresent": true
+  },
+  "v68RestoredIdentity": {
+    "nextId": 1,
+    "highestReference": 0,
+    "uniqueIndexPresent": true
+  },
+  "productionCountsTotalsAttachmentsEqual": true,
+  "completeRowContentEqual": true,
+  "exactAgeDecryptBytesEqual": true,
+  "sourceUnchanged": true,
+  "customerDataUsed": false,
+  "customerPrivateKeyUsed": false,
+  "productionPortTouched": false,
+  "ownedTargetDatabaseRemoved": true,
+  "temporaryPrivateKeyAndFilesRemoved": true
+}

@@ -1,0 +1,15 @@
+# Opt-in only: an independently managed OCR service must already use this
+# pre-created internal Docker network. No OCR image is bundled or started.
+services:
+  backend:
+    environment:
+      COPPER_OCR_ENABLED: "true"
+      COPPER_OCR_ENDPOINT: ${COPPER_OCR_ENDPOINT:?Set an explicit private OCR endpoint}
+    networks:
+      - data
+      - ocr
+
+networks:
+  ocr:
+    external: true
+    name: ${COPPER_OCR_NETWORK:?Set the pre-created internal OCR network}

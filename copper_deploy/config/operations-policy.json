@@ -1,0 +1,158 @@
+{
+  "formatVersion": "copper-operations-policy/v1",
+  "policyVersion": "2026-07-21",
+  "logClasses": {
+    "gateway": {
+      "store": "docker-local",
+      "maxFileBytes": 20971520,
+      "maxFiles": 5,
+      "maxTotalBytes": 104857600,
+      "retention": "size-bound",
+      "permissions": "docker-root-only",
+      "safeDeletion": "oldest-segment-by-docker-local-driver"
+    },
+    "database": {
+      "store": "docker-local",
+      "maxFileBytes": 20971520,
+      "maxFiles": 5,
+      "maxTotalBytes": 104857600,
+      "retention": "size-bound",
+      "permissions": "docker-root-only",
+      "safeDeletion": "oldest-segment-by-docker-local-driver",
+      "binaryLog": "row-full-30-day-retention-copper-backup-v2-incremental-chain",
+      "generalLog": "disabled",
+      "slowQueryLog": "disabled"
+    },
+    "applicationConsole": {
+      "store": "docker-local",
+      "maxFileBytes": 20971520,
+      "maxFiles": 5,
+      "maxTotalBytes": 104857600,
+      "retention": "size-bound",
+      "permissions": "docker-root-only",
+      "safeDeletion": "oldest-segment-by-docker-local-driver"
+    },
+    "applicationFile": {
+      "store": "customer-data-volume",
+      "path": "logs/copper-backend.log",
+      "maxFileBytes": 20971520,
+      "maxHistoryDays": 7,
+      "maxTotalBytes": 209715200,
+      "retention": "7-days-and-200MiB-whichever-first",
+      "permissions": "0750-parent-owned-by-backend-runtime",
+      "safeDeletion": "oldest-rolled-segment-by-logback"
+    },
+    "audit": {
+      "store": "mysql-business-and-security-audit-tables",
+      "rotation": "not-a-text-log",
+      "maxSize": "database-capacity-protection",
+      "retention": "customer-business-lifetime",
+      "permissions": "application-rbac-and-database-credentials",
+      "safeDeletion": "never-automatic"
+    },
+    "operations": {
+      "store": "root-only-json-and-system-journal",
+      "maxFileBytes": 5242880,
+      "maxFiles": 2,
+      "maxTotalBytesPerStream": 10485760,
+      "retention": "current-plus-one-rotated-segment",
+      "permissions": "0700-directory-0600-files",
+      "safeDeletion": "oldest-segment-only-never-current-state-or-unique-forensic-evidence",
+      "journalRateLimitIntervalSeconds": 30,
+      "journalRateLimitBurst": 200
+    }
+  },
+  "capacity": {
+    "warning": {"availablePercentBelow": 20, "availableBytesBelow": 5368709120},
+    "critical": {"availablePercentBelow": 10, "availableBytesBelow": 2147483648},
+    "blocked": {"availablePercentBelow": 5, "availableBytesBelow": 1073741824},
+    "priority": [
+      "stop-new-exports-backups-and-large-attachments-at-critical",
+      "rotate-only-expired-reproducible-logs",
+      "expand-customer-storage-or-delete-verified-expired-backups-by-explicit-command",
+      "block-business-writes-at-blocked",
+      "never-auto-delete-database-attachments-audit-or-only-successful-backup"
+    ]
+  },
+  "recoveryObjectives": {
+    "engineeringBaseline": {
+      "scheduledBackupIntervalHours": 24,
+      "scheduledBackupPattern": "weekly-full-base-and-daily-binlog-attachment-increment",
+      "backupFreshnessWarningHours": 30,
+      "backupFreshnessCriticalHours": 48,
+      "technicalRestoreTargetMinutes": 240,
+      "restoreDrillFreshnessDays": 180,
+      "measuredRestoreSeconds": 483,
+      "measuredRestoreScope": "88-table-small-fixture-on-mysql-8.4.10",
+      "claimBoundary": "engineering-target-not-commercial-sla"
+    },
+    "serviceModels": [
+      {
+        "id": "software-self-hosted",
+        "backupResponsibility": "customer",
+        "responseCommitment": "none",
+        "rpo": "no-commercial-commitment; 24h engineering target only while daily verified backup remains healthy",
+        "rto": "no-commercial-commitment; customer-specific drill required"
+      },
+      {
+        "id": "standard-deployment",
+        "backupResponsibility": "Copper configures daily schedule and one restore verification at handover; customer operates after handover",
+        "responseCommitment": "none-after-acceptance",
+        "rpo": "handover evidence only; no continuing RPO after handover",
+        "rto": "one handover drill only; no continuing incident RTO"
+      },
+      {
+        "id": "annual-maintenance",
+        "backupResponsibility": "customer; Copper may inspect within four annual remote service sessions",
+        "responseCommitment": "within-2-business-days-subject-to-remaining-service-quota",
+        "rpo": "no-commercial-commitment",
+        "rto": "no-commercial-commitment; recovery consumes agreed service quota or separate fee"
+      },
+      {
+        "id": "managed-operations",
+        "backupResponsibility": "Copper monitors configured daily backup; customer supplies healthy server and off-host target",
+        "responseCommitment": "alert-acknowledgement-within-4-business-hours-not-24x7",
+        "rpo": "24h operational target only with verified off-host target and healthy schedule; breach at 30h",
+        "rto": "8-business-hour operational target after authorization, prerequisites and recoverable evidence are ready; incident labor is separately scoped"
+      }
+    ]
+  },
+  "incidentChecklists": {
+    "database": {
+      "stopRule": "reject-writes-and-never-return-false-success",
+      "commands": ["copperctl monitor status", "copperctl doctor", "copperctl logs mysql", "copperctl logs backend"],
+      "recoveryGate": "mysql-backend-web-healthy-and-business-invariants-verified",
+      "escalation": "platform-owner-then-database-recovery-operator"
+    },
+    "disk": {
+      "stopRule": "critical-stops-large-jobs-blocked-stops-business-writes",
+      "commands": ["copperctl monitor status", "copperctl operations status", "copperctl storage status"],
+      "recoveryGate": "capacity-normal-or-warning-and-write-probe-passed",
+      "escalation": "customer-infrastructure-owner-then-Copper-if-product-files-unexpected"
+    },
+    "backup": {
+      "stopRule": "never-publish-partial-package-or-delete-last-success",
+      "commands": ["copperctl backup status", "copperctl backup key status", "copperctl storage status"],
+      "recoveryGate": "new-backup-verified-and-offline-key-proof-current",
+      "escalation": "backup-target-owner-then-Copper-operations"
+    },
+    "certificate": {
+      "stopRule": "never-downgrade-public-service-to-http",
+      "commands": ["copperctl monitor status", "copperctl tls status", "copperctl doctor"],
+      "recoveryGate": "valid-chain-domain-cookie-and-readiness-verified",
+      "escalation": "domain-dns-owner-then-certificate-operator"
+    },
+    "time": {
+      "stopRule": "block-time-sensitive-high-risk-actions-at-blocked-drift",
+      "commands": ["copperctl monitor status", "timedatectl status", "chronyc tracking"],
+      "recoveryGate": "ntp-synchronized-offset-normal-and-audit-order-reviewed",
+      "escalation": "customer-infrastructure-owner"
+    },
+    "power": {
+      "stopRule": "do-not-release-unknown-or-half-migrated-state",
+      "commands": ["copperctl status", "copperctl doctor", "copperctl monitor check", "copperctl backup status"],
+      "recoveryGate": "flyway-tables-foreign-keys-inventory-finance-attachments-and-audit-invariants-verified",
+      "escalation": "customer-infrastructure-owner-then-Copper-recovery-operator"
+    }
+  }
+}

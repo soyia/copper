@@ -1,0 +1,17 @@
+{
+  "format": "copper-engineering-material-review/v1",
+  "reviewedAt": "2026-10-25T11:19:25.928065+00:00",
+  "reviewer": "Copper release engineering root agent",
+  "scope": "Exact five official Docker DEBs and their original license/source materials for internal acceptance medium",
+  "archive": "../rc9-docker-rights/docker-deb-rights-review-final.tar.gz",
+  "archiveSha256": "c7541c1a10f25c8309a233f2096417565807490297010457dfd231b115af0945",
+  "closedFilesVerified": 3394,
+  "mainPrograms": 7,
+  "goModulesWithPreciseSourceAndLicense": 405,
+  "moduleCopyrightNotStated": 28,
+  "evidenceConclusion": "Material identity, closed inventory and preservation of original full license/NOTICE/source bytes reviewed; absent upstream ownership assertions remain expressly unstated. No legal or owner signature fabricated.",
+  "securityConclusion": "Supplemental vendor dependency findings remain 6 Critical/29 High, including six vendor x/net HTTP/2 copies; root collected actual package/ELF/SBOM/Grype and Unix-socket exposure evidence. Not eliminated and not an application gate PASS.",
+  "thirdPartyStatus": "NONBLOCKING_INTERNAL_OWNER_DEFERRED",
+  "legalReview": "REQUIRED_OWNER_DEFERRED",
+  "publicOrCustomerApproval": false
+}

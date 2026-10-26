@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ "${EUID:-$(id -u)}" -eq 0 ]] || {
+  echo "请使用 sudo copper-maintain 运行。" >&2
+  exit 2
+}
+
+command -v copperctl >/dev/null 2>&1 || {
+  echo "没有找到 Copper 维护程序；请先完成安装。" >&2
+  exit 3
+}
+
+pause() {
+  [[ -t 0 ]] || return 0
+  read -r -p "按回车键返回维护菜单……" _
+}
+
+run_menu_action() {
+  local action_label="$1"
+  shift
+  echo
+  if "$@"; then
+    echo
+    echo "${action_label}已完成。"
+  else
+    local action_status=$?
+    echo
+    echo "${action_label}未完成（错误码 ${action_status}）。请按上方提示处理后，从当前菜单重试。" >&2
+  fi
+  pause
+}
+
+site_url() {
+  local domain=""
+  if [[ -r /etc/copper/copper.env ]]; then
+    domain="$(awk -F= '$1 == "COPPER_DOMAIN" {print substr($0, index($0, "=") + 1); exit}' /etc/copper/copper.env)"
+  fi
+  [[ -n "$domain" ]] && printf 'https://%s' "$domain" || printf 'Copper 登录页'
+}
+
+administrator_guide() {
+  echo
+  echo "首次管理员登录"
+  echo "1. 只有客户授权管理员本人可以查看一次性密码。"
+  echo "2. 密码出现后，打开 $(site_url) 并登录。"
+  echo "3. 按页面要求修改密码，然后使用新密码重新登录一次。"
+  echo "4. 回到这里再次检查；看到“没有待交付的首次管理员凭据文件”才算完成。"
+  echo
+  copperctl admin init
+  if [[ -t 0 ]]; then
+    read -r -p "授权管理员本人现在是否要查看一次性密码？[y/N]：" answer
+    if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+      copperctl admin init --show
+      echo
+      echo "请现在完成改密和重新登录；完成后选择菜单中的“复查首次登录”。"
+    fi
+  fi
+}
+
+administrator_check() {
+  echo
+  copperctl admin init
+  echo
+  echo "如果上方显示没有待交付文件，说明一次性密码已销毁。"
+}
+
+data_protection_guide() {
+  echo
+  echo "完成数据保护"
+  echo "数据保护必须在保存客户恢复私钥的 Mac 上完成；私钥不能上传到服务器。"
+  echo "请在安装介质目录运行：./copper-manage-from-mac"
+  echo "选择“完成数据保护”，程序会自动："
+  echo "  - 登记两人交接记录；"
+  echo "  - 创建加密整站备份；"
+  echo "  - 下载备份和校验文件；"
+  echo "  - 用客户私钥离线验证；"
+  echo "  - 把加密备份复制到第二位置（可选择 U 盘）；"
+  echo "  - 登记验证回执并启用每日备份。"
+  echo
+  echo "当前服务器状态："
+  copperctl backup key status 2>/dev/null || true
+  copperctl backup status 2>/dev/null || true
+}
+
+removal_guide() {
+  echo
+  echo "停止使用或彻底移除站点"
+  echo "请在保存客户恢复私钥的 Mac 安装介质目录运行：./copper-manage-from-mac"
+  echo "选择“停止使用、重新启用或彻底移除站点”。"
+  echo
+  echo "可选择："
+  echo "  - 停止使用并保留数据库、图片、配置、密钥和备份；"
+  echo "  - 使用原数据重新启用；"
+  echo "  - 先创建整站备份、下载、离线验证并复制到第二位置，再彻底移除。"
+  echo
+  echo "服务器菜单不会绕过客户私钥验证直接删除数据。"
+}
+
+create_backup() {
+  echo
+  echo "即将创建一致性加密整站备份。期间网页会短暂停止写入。"
+  if [[ -t 0 ]]; then
+    read -r -p "继续吗？[y/N]：" answer
+    [[ "$answer" == "y" || "$answer" == "Y" ]] || return 0
+  fi
+  copperctl backup create
+  copperctl backup status
+}
+
+show_logs() {
+  echo
+  echo "请选择要查看的日志：1 网页  2 后台  3 数据库"
+  read -r -p "序号：" choice
+  case "$choice" in
+    1) copperctl logs web ;;
+    2) copperctl logs backend ;;
+    3) copperctl logs mysql ;;
+    *) echo "没有选择有效序号。" ;;
+  esac
+}
+
+cloudflare_remote_access() {
+  while true; do
+    clear 2>/dev/null || true
+    cat <<'EOF'
+互联网远程访问（Cloudflare，可选）
+==================================
+1. 首次配置
+2. 启用并验证
+3. 检查状态
+4. 轮换 Tunnel Token
+5. 停用（保留配置与 Token）
+6. 移除本地 Cloudflare 配置与 Token
+7. 返回
+
+说明：此功能不开放 ERP、Backend 或数据库端口。Cloudflare 故障不影响 LAN 使用。
+EOF
+    read -r -p "请选择序号：" remote_choice
+    case "$remote_choice" in
+      1) run_menu_action "首次配置" copperctl remote-access cloudflare configure ;;
+      2)
+        echo
+        echo "启用前必须已经在客户 Cloudflare 账号中完成 Public Hostname 和 Access 默认拒绝策略。"
+        echo "1. 已经完成，继续启用并自动验证"
+        echo "2. 尚未完成，返回"
+        read -r -p "请选择序号：" enable_choice
+        case "$enable_choice" in
+          1) run_menu_action "启用并验证" copperctl remote-access cloudflare enable ;;
+          2) echo "已返回，远程访问未改变。"; pause ;;
+          *) echo "没有选择有效序号，远程访问未改变。"; pause ;;
+        esac
+        ;;
+      3) run_menu_action "状态检查" copperctl remote-access cloudflare status ;;
+      4) run_menu_action "Tunnel Token 轮换" copperctl remote-access cloudflare rotate-token ;;
+      5) run_menu_action "停用远程访问" copperctl remote-access cloudflare disable ;;
+      6)
+        site_id="$(awk -F= '$1 == "COPPER_SITE_ID" {print substr($0, index($0, "=") + 1); exit}' /etc/copper/copper.env)"
+        if [[ ! "$site_id" =~ ^[a-z0-9][a-z0-9-]{2,31}$ ]]; then
+          echo "无法确认当前站点代号，本地 Cloudflare 配置未改变。" >&2
+          pause
+          continue
+        fi
+        echo
+        echo "这会删除本机 Cloudflare connector、配置和 Tunnel token；不会删除 Copper 数据、图片或备份。"
+        echo "Cloudflare Dashboard 中的 Tunnel、Public Hostname 和 Access 策略仍需客户自行删除。"
+        echo
+        echo "1. 确认移除当前站点 ${site_id} 的本地 Cloudflare 配置"
+        echo "2. 返回，不做改变"
+        read -r -p "请选择序号：" removal_choice
+        case "$removal_choice" in
+          1)
+            if copperctl remote-access cloudflare remove --confirm "${site_id}:REMOVE-CLOUDFLARE"; then
+              echo
+              echo "本地 Cloudflare 配置已移除。"
+            else
+              removal_status=$?
+              echo
+              echo "本地 Cloudflare 配置未完成移除（错误码 ${removal_status}），请按上方提示处理。" >&2
+            fi
+            ;;
+          2) echo "已返回，当前配置未改变。" ;;
+          *) echo "没有选择有效序号，当前配置未改变。" ;;
+        esac
+        pause
+        ;;
+      7) return 0 ;;
+      *) echo "请输入 1-7。"; pause ;;
+    esac
+  done
+}
+
+menu() {
+  [[ -t 0 ]] || {
+    echo "维护菜单需要在可输入的终端中运行。" >&2
+    exit 2
+  }
+  while true; do
+    clear 2>/dev/null || true
+    cat <<'EOF'
+Copper 维护中心
+==============================
+1. 首次管理员登录
+2. 复查首次登录是否完成
+3. 完成数据保护
+4. 检查系统是否正常
+5. 立即创建整站备份
+6. 查看备份与每日计划
+7. 更换访问域名
+8. 互联网远程访问（Cloudflare，可选）
+9. 查看运行日志
+10. 停止使用或彻底移除站点
+11. 退出
+EOF
+    read -r -p "请选择序号：" choice
+    case "$choice" in
+      1) administrator_guide; pause ;;
+      2) administrator_check; pause ;;
+      3) data_protection_guide; pause ;;
+      4) copperctl doctor; copperctl monitor check; pause ;;
+      5) create_backup; pause ;;
+      6) copperctl backup status; copperctl backup schedule status; pause ;;
+      7) copper-install change-domain; pause ;;
+      8) cloudflare_remote_access ;;
+      9) show_logs; pause ;;
+      10) removal_guide; pause ;;
+      11) return 0 ;;
+      *) echo "请输入 1-11。"; pause ;;
+    esac
+  done
+}
+
+case "${1:-menu}" in
+  menu) [[ $# -le 1 ]] || { echo "menu 不接受额外参数" >&2; exit 2; }; menu ;;
+  admin) [[ $# -eq 1 ]] || { echo "admin 不接受额外参数" >&2; exit 2; }; administrator_guide ;;
+  admin-check) [[ $# -eq 1 ]] || { echo "admin-check 不接受额外参数" >&2; exit 2; }; administrator_check ;;
+  protect) [[ $# -eq 1 ]] || { echo "protect 不接受额外参数" >&2; exit 2; }; data_protection_guide ;;
+  remote-access) [[ $# -eq 1 ]] || { echo "remote-access 不接受额外参数" >&2; exit 2; }; cloudflare_remote_access ;;
+  remove) [[ $# -eq 1 ]] || { echo "remove 不接受额外参数" >&2; exit 2; }; removal_guide ;;
+  status) [[ $# -eq 1 ]] || { echo "status 不接受额外参数" >&2; exit 2; }; copperctl doctor; copperctl monitor check ;;
+  *) echo "用法：sudo copper-maintain [menu|admin|admin-check|protect|remote-access|remove|status]" >&2; exit 2 ;;
+esac

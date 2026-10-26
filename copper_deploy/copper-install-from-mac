@@ -1,0 +1,1248 @@
+#!/usr/bin/env python3
+"""Prepare customer recovery keys locally and install Copper over SSH.
+
+This entry point is intentionally Mac-only.  It never copies the age private
+identity into the verified installation media, the answers file, or the remote
+host.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import ipaddress
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+from dataclasses import dataclass
+
+
+INSTALLER_VERSION = "0.4.5"
+TRANSFER_ATTEMPTS = 3
+TRANSFER_RETRY_SECONDS = 2
+RESUME_FORMAT = "copper-mac-install-resume/v1"
+PROFILE_FORMAT = "copper-mac-site-profile/v1"
+SITE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,31}$")
+DOMAIN_RE = re.compile(
+    r"^(?=.{4,253}\.?$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
+SSH_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+SSH_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+AGE_RECIPIENT_RE = re.compile(r"^age1[0-9a-z]{20,}$")
+LOCAL_ONLY_KEY_EVIDENCE_DIRECTORIES = frozenset({"recovery-receipts", "restore-rehearsals"})
+
+
+class LocalInstallError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class InstallAnswers:
+    site_id: str
+    domain: str
+    public_ip: str
+    ssh_host: str
+    ssh_user: str
+    ssh_key: pathlib.Path
+    customer_reference: str
+    primary_key_root: pathlib.Path
+    backup_key_root: pathlib.Path
+    time_zone: str
+
+
+@dataclass(frozen=True)
+class RemoteFileState:
+    size: int | None
+    sha256: str
+
+
+def fail(message: str) -> None:
+    raise LocalInstallError(message)
+
+
+def prompt(label: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    result = input(f"{label}{suffix}：").strip()
+    return result or default
+
+
+def choose(question: str, options: list[str]) -> int:
+    print(f"\n{question}")
+    for index, option in enumerate(options, 1):
+        print(f"  {index}. {option}")
+    while True:
+        observed = input("请选择序号：").strip()
+        if observed.isdigit() and 1 <= int(observed) <= len(options):
+            return int(observed)
+        print("请输入上面显示的序号。")
+
+
+def normalize_domain(value: str) -> str:
+    raw = value.strip()
+    if raw.lower().startswith("http://"):
+        fail("Copper 只支持安全访问地址；请改用 https:// 或只填写域名")
+    if raw.lower().startswith("https://"):
+        try:
+            address = urllib.parse.urlsplit(raw)
+            port = address.port
+        except ValueError:
+            fail("访问地址格式不正确")
+        if (
+            not address.hostname
+            or address.username
+            or address.password
+            or port is not None
+            or address.path not in ("", "/")
+            or address.query
+            or address.fragment
+        ):
+            fail("访问地址只能包含 https:// 和域名，不能包含端口、路径、参数或账号")
+        result = address.hostname
+    else:
+        if "://" in raw:
+            fail("访问地址格式不正确；请填写域名或以 https:// 开头的地址")
+        result = raw.rstrip("/")
+        if "/" in result or "?" in result or "#" in result or "@" in result:
+            fail("访问地址不能包含路径、参数或账号")
+    result = result.strip().lower().rstrip(".")
+    if ":" in result or re.fullmatch(r"[0-9.]+", result):
+        return normalize_public_ipv4(result)
+    try:
+        result = result.encode("idna").decode("ascii")
+    except UnicodeError:
+        fail("访问域名格式不正确")
+    if not DOMAIN_RE.fullmatch(result):
+        fail("访问域名格式不正确")
+    return result
+
+
+def normalize_public_ipv4(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        fail("服务器公网 IPv4 格式不正确")
+    if address.version != 4 or not address.is_global or address.is_multicast or address.is_reserved:
+        fail("服务器地址必须是可从互联网访问的公网 IPv4")
+    return str(address)
+
+
+def normalize_site_id(value: str) -> str:
+    result = value.strip().lower()
+    if not SITE_ID_RE.fullmatch(result):
+        fail("站点代号只能使用 3-32 位小写字母、数字和连字符")
+    return result
+
+
+def normalize_ssh_host(value: str) -> str:
+    result = value.strip()
+    if not SSH_HOST_RE.fullmatch(result) or ".." in result:
+        fail("SSH 服务器地址格式不正确")
+    return result
+
+
+def normalize_ssh_user(value: str) -> str:
+    result = value.strip()
+    if not SSH_USER_RE.fullmatch(result):
+        fail("SSH 登录用户名格式不正确")
+    return result
+
+
+def normalize_label(value: str, label: str) -> str:
+    result = value.strip()
+    if not result or len(result) > 100 or any(character in result for character in "\r\n\t"):
+        fail(f"{label}必须为 1-100 个普通字符")
+    return result
+
+
+def default_site_id(domain: str) -> str:
+    label = re.sub(r"[^a-z0-9-]", "-", domain.split(".")[0]).strip("-")
+    value = label if label.startswith("copper-") else f"copper-{label}"
+    return value[:32].strip("-")
+
+
+def resolve_addresses(domain: str, family: int) -> set[str]:
+    try:
+        addresses: set[str] = set()
+        for item in socket.getaddrinfo(domain, 443, family, socket.SOCK_STREAM):
+            raw_address = item[4][0]
+            try:
+                address = ipaddress.ip_address(raw_address)
+            except ValueError:
+                # Treat an unfamiliar resolver result as present so DNS validation
+                # remains fail-closed instead of silently accepting it.
+                addresses.add(raw_address)
+                continue
+            # macOS may synthesize ::ffff:A.B.C.D for an A-only domain when an
+            # AF_INET6 lookup is requested.  This is not a published AAAA record.
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+                continue
+            addresses.add(str(address))
+        return addresses
+    except socket.gaierror:
+        return set()
+
+
+def validate_dns(domain: str, public_ip: str) -> dict[str, list[str]]:
+    domain = normalize_domain(domain)
+    public_ip = normalize_public_ipv4(public_ip)
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        pass
+    else:
+        if domain != public_ip:
+            fail("访问公网 IP 与填写的服务器 IP 不一致")
+        return {"ipv4": [domain], "ipv6": []}
+    ipv4 = resolve_addresses(domain, socket.AF_INET)
+    ipv6 = resolve_addresses(domain, socket.AF_INET6)
+    if ipv4 != {public_ip}:
+        observed = "、".join(sorted(ipv4)) if ipv4 else "尚未查到 IPv4"
+        fail(f"域名当前解析为 {observed}，与服务器 {public_ip} 不一致")
+    if ipv6:
+        fail("域名仍有 IPv6 记录，可能把部分用户带到其他服务器；请先删除后重试")
+    return {"ipv4": sorted(ipv4), "ipv6": []}
+
+
+def validate_dns_with_choices(values: dict[str, str], interactive: bool) -> dict[str, list[str]]:
+    while True:
+        print(f"正在核对访问地址：{values['domain']} -> {values['publicIp']}")
+        try:
+            result = validate_dns(values["domain"], values["publicIp"])
+            print("访问地址与服务器 IP 一致。")
+            return result
+        except LocalInstallError as error:
+            if not interactive:
+                raise
+            print(f"\n当前未通过：{error}")
+            choice = choose(
+                "请处理 DNS 后选择下一步",
+                ["我已设置好，重新检测", "更换域名或服务器 IP", "暂时退出，稍后再运行"],
+            )
+            if choice == 1:
+                continue
+            if choice == 2:
+                values["domain"] = normalize_domain(prompt("新的域名或固定公网 IPv4", values["domain"]))
+                values["publicIp"] = normalize_public_ipv4(prompt("新的服务器公网 IPv4", values["publicIp"]))
+                values["sshHost"] = normalize_ssh_host(prompt("SSH 服务器地址", values["publicIp"]))
+                continue
+            fail("操作者选择稍后继续；尚未生成密钥或上传安装文件")
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as reader:
+        for block in iter(lambda: reader.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def parse_sha256_sums(media_root: pathlib.Path) -> dict[pathlib.Path, str]:
+    sums = media_root / "SHA256SUMS"
+    if not sums.is_file() or sums.is_symlink():
+        fail("安装目录缺少 SHA256SUMS")
+    result: dict[pathlib.Path, str] = {}
+    for number, raw in enumerate(sums.read_text(encoding="utf-8").splitlines(), 1):
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", raw)
+        if not match:
+            fail(f"SHA256SUMS 第 {number} 行格式不正确")
+        relative_text = match.group(2).removeprefix("./")
+        relative = pathlib.PurePosixPath(relative_text)
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            fail("SHA256SUMS 包含安装目录之外的路径")
+        path = media_root.joinpath(*relative.parts)
+        if path in result:
+            fail(f"SHA256SUMS 重复列出 {relative_text}")
+        result[path] = match.group(1)
+    return result
+
+
+def verify_local_media(media_root: pathlib.Path) -> list[pathlib.Path]:
+    expected = parse_sha256_sums(media_root)
+    required = {
+        media_root / "copper-install",
+        media_root / "copper-install-from-mac",
+        media_root / "copper-manage-from-mac",
+        media_root / "copper-upgrade-from-mac",
+        media_root / "copper-recover-from-mac",
+        media_root / "OPERATOR_VALUES.env",
+        media_root / "RELEASE-MANIFEST.json",
+        media_root / "tools/copper-key-offline",
+    }
+    missing = sorted(required - set(expected))
+    if missing:
+        fail("安装清单缺少：" + "、".join(str(path.relative_to(media_root)) for path in missing))
+    for path, wanted in expected.items():
+        if not path.is_file() or path.is_symlink():
+            fail(f"安装文件不存在或不安全：{path.relative_to(media_root)}")
+        if sha256_file(path) != wanted:
+            fail(f"安装文件校验失败：{path.relative_to(media_root)}")
+    actual = {
+        path
+        for path in media_root.rglob("*")
+        if path.is_file() and not path.is_symlink() and path.name != "SHA256SUMS"
+    }
+    ignored = sorted(actual - set(expected))
+    if ignored:
+        print("提示：以下本机附加文件不会上传：" + "、".join(str(path.relative_to(media_root)) for path in ignored))
+    return sorted(expected)
+
+
+def require_local_tools(interactive: bool) -> None:
+    if sys.platform != "darwin":
+        fail("这个入口只用于 Mac；如已登录 Ubuntu 服务器，请运行 sudo ./copper-install")
+    for tool in ("ssh", "sftp"):
+        if shutil.which(tool) is None:
+            fail(f"Mac 缺少 {tool}，无法继续")
+    if shutil.which("age-keygen") is not None:
+        return
+    brew = shutil.which("brew")
+    if brew is None:
+        fail("Mac 尚未安装 age，且没有找到 Homebrew；请先安装 age 后重新运行")
+    if not interactive or choose("Mac 尚未安装备份加密工具 age", ["自动安装 age", "退出"]) != 1:
+        fail("未安装 age，尚未生成任何私钥")
+    subprocess.run([brew, "install", "age"], check=True)
+    if shutil.which("age-keygen") is None:
+        fail("age 安装后仍找不到 age-keygen")
+
+
+def ensure_private_path_outside_media(path: pathlib.Path, media_root: pathlib.Path, label: str) -> None:
+    try:
+        path.relative_to(media_root)
+    except ValueError:
+        return
+    fail(f"{label}不能放在安装介质目录内，否则可能被上传")
+
+
+def key_replica_hashes(root: pathlib.Path) -> dict[str, str]:
+    """Hash replicated key evidence while excluding named local runtime records.
+
+    Recovery checkpoints and ordinary restore-rehearsal checkpoints are
+    intentionally local until their completed receipts are copied explicitly.
+    They are not key material and may differ between the primary directory and
+    its offline replica.  Every other file remains part of the strict replica
+    comparison.
+    """
+    result: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            fail(f"密钥目录包含符号链接：{path}")
+        if path.is_file():
+            relative = path.relative_to(root)
+            if relative.parts and relative.parts[0] in LOCAL_ONLY_KEY_EVIDENCE_DIRECTORIES:
+                continue
+            result[relative.as_posix()] = sha256_file(path)
+    return result
+
+
+def validate_key_directory(path: pathlib.Path) -> str:
+    identity = path / "copper-age-identity.txt"
+    recipient_file = path / "recipient.txt"
+    if not identity.is_file() or identity.is_symlink() or not recipient_file.is_file() or recipient_file.is_symlink():
+        fail(f"密钥目录不完整：{path}")
+    if stat.S_IMODE(identity.stat().st_mode) & 0o077:
+        fail(f"私钥权限不安全：{identity}")
+    recipient = recipient_file.read_text(encoding="ascii").strip()
+    if not AGE_RECIPIENT_RE.fullmatch(recipient):
+        fail(f"公钥格式不正确：{recipient_file}")
+    derived = subprocess.run(
+        ["age-keygen", "-y", str(identity)], text=True, capture_output=True, check=True
+    ).stdout.strip()
+    if derived != recipient:
+        fail("私钥与 recipient.txt 中的公钥不匹配")
+    return recipient
+
+
+def copy_key_directory(source: pathlib.Path, destination: pathlib.Path) -> None:
+    shutil.copytree(source, destination, copy_function=shutil.copy2)
+    os.chmod(destination, 0o700)
+    for path in destination.rglob("*"):
+        if path.is_file():
+            source_mode = stat.S_IMODE((source / path.relative_to(destination)).stat().st_mode)
+            os.chmod(path, source_mode)
+
+
+def planned_key_directory(
+    supplied_directory: pathlib.Path,
+    site_id: str,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """Return the final key directory and the filesystem root to prepare.
+
+    Operators may provide either a shared parent directory such as
+    ``Copper-Recovery-Keys`` or the final site directory itself.  Treating the
+    latter as another parent produced paths such as ``site-id/site-id``.
+    """
+    supplied = supplied_directory.resolve()
+    if supplied.name == site_id:
+        historical_parent = supplied.parent
+        historical_identity = historical_parent / "copper-age-identity.txt"
+        if (
+            historical_parent.name == site_id
+            and historical_parent.is_dir()
+            and not historical_parent.is_symlink()
+            and historical_identity.is_file()
+            and not historical_identity.is_symlink()
+        ):
+            return historical_parent, historical_parent.parent
+        return supplied, supplied.parent
+    return supplied / site_id, supplied
+
+
+def prepare_key_storage_root(root: pathlib.Path) -> None:
+    if root.exists():
+        if not root.is_dir() or root.is_symlink():
+            fail(f"私钥上级目录不是安全目录：{root}")
+        return
+    root.mkdir(parents=True, mode=0o700)
+    os.chmod(root, 0o700)
+
+
+def prepare_recovery_keys(
+    media_root: pathlib.Path,
+    site_id: str,
+    customer_reference: str,
+    primary_root: pathlib.Path,
+    backup_root: pathlib.Path,
+    allow_same_disk: bool,
+    interactive: bool,
+) -> tuple[str, pathlib.Path, pathlib.Path, bool]:
+    primary, primary_storage_root = planned_key_directory(primary_root, site_id)
+    backup, backup_storage_root = planned_key_directory(backup_root, site_id)
+    prepare_key_storage_root(primary_storage_root)
+    prepare_key_storage_root(backup_storage_root)
+    ensure_private_path_outside_media(primary, media_root, "主私钥目录")
+    ensure_private_path_outside_media(backup, media_root, "第二份私钥目录")
+    if primary == backup:
+        fail("主私钥目录与第二份备份目录不能相同")
+    independent_filesystem = primary_storage_root.stat().st_dev != backup_storage_root.stat().st_dev
+    if not independent_filesystem and not allow_same_disk:
+        if not interactive or choose(
+            "两份私钥位于同一文件系统，硬盘损坏时可能同时丢失",
+            ["仅作为内部演练继续", "退出并选择外接盘作为第二份目录"],
+        ) != 1:
+            fail("请连接外接盘后重新运行，或在内部演练中明确允许同盘副本")
+
+    if not primary.exists():
+        if backup.exists():
+            fail("只找到第二份私钥；为避免误换密钥，请先由持有人确认后恢复主副本")
+        tool = media_root / "tools/copper-key-offline"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(tool),
+                "generate",
+                "--output-dir",
+                str(primary),
+                "--site-id",
+                site_id,
+                "--customer-reference",
+                customer_reference,
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        document = json.loads(result.stdout)
+        if document.get("outputDirectory") != str(primary):
+            fail("密钥工具返回的保存目录不一致")
+    recipient = validate_key_directory(primary)
+    if backup.exists():
+        backup_recipient = validate_key_directory(backup)
+        if backup_recipient != recipient or key_replica_hashes(primary) != key_replica_hashes(backup):
+            fail("两份私钥目录不一致；拒绝覆盖任何一份")
+    else:
+        copy_key_directory(primary, backup)
+        if validate_key_directory(backup) != recipient or key_replica_hashes(primary) != key_replica_hashes(backup):
+            fail("第二份私钥复制校验失败")
+    return recipient, primary, backup, independent_filesystem
+
+
+def stage_verified_media(
+    media_root: pathlib.Path,
+    expected_files: list[pathlib.Path],
+    temporary: pathlib.Path,
+    omitted_relatives: set[pathlib.PurePosixPath] | None = None,
+) -> pathlib.Path:
+    staged = temporary / "media"
+    staged.mkdir(mode=0o700)
+    expected_hashes = parse_sha256_sums(media_root)
+    omitted = omitted_relatives or set()
+    inventory: list[str] = []
+    for source in expected_files:
+        relative = source.relative_to(media_root)
+        relative_posix = pathlib.PurePosixPath(relative.as_posix())
+        if sha256_file(source) != expected_hashes[source]:
+            fail(f"准备上传时安装文件发生变化：{relative}")
+        if relative_posix in omitted:
+            continue
+        destination = staged / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        if sha256_file(destination) != expected_hashes[source]:
+            fail(f"准备上传时复制校验失败：{relative}")
+        inventory.append(f"{expected_hashes[source]}  ./{relative_posix.as_posix()}")
+    (staged / "SHA256SUMS").write_text("\n".join(inventory) + "\n", encoding="utf-8")
+    return staged
+
+
+def ssh_base(answers: InstallAnswers, *, tty: bool = False) -> list[str]:
+    command = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+        "-i",
+        str(answers.ssh_key),
+    ]
+    if tty:
+        command.append("-tt")
+    command.append(f"{answers.ssh_user}@{answers.ssh_host}")
+    return command
+
+
+def sftp_base(answers: InstallAnswers) -> list[str]:
+    return [
+        "sftp",
+        "-b",
+        "-",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+        "-i",
+        str(answers.ssh_key),
+        f"{answers.ssh_user}@{answers.ssh_host}",
+    ]
+
+
+def remote_home_expression(relative: str) -> str:
+    path = pathlib.PurePosixPath(relative)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        fail("远程上传路径不安全")
+    return f'"$HOME"/{shlex.quote(path.as_posix())}'
+
+
+def sftp_quote(value: str) -> str:
+    if any(character in value for character in "\r\n\0"):
+        fail("上传路径包含不安全字符")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def run_remote_script(answers: InstallAnswers, script: str, *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [*ssh_base(answers), "bash", "-lc", shlex.quote(script)],
+        check=False,
+        capture_output=capture_output,
+        text=capture_output,
+    )
+
+
+def remote_file_state(answers: InstallAnswers, remote_relative: str) -> RemoteFileState | None:
+    remote = remote_home_expression(remote_relative)
+    script = f'''p={remote}
+if [ ! -f "$p" ]; then
+  printf 'MISSING\\n'
+else
+  size="$(stat -c %s -- "$p")"
+  digest="$(sha256sum -- "$p" | awk '{{print $1}}')"
+  printf '%s %s\\n' "$size" "$digest"
+fi
+'''
+    result = run_remote_script(answers, script, capture_output=True)
+    if result.returncode != 0:
+        return None
+    observed = result.stdout.strip()
+    if observed == "MISSING":
+        return RemoteFileState(None, "")
+    match = re.fullmatch(r"([0-9]+) ([0-9a-f]{64})", observed)
+    if not match:
+        return None
+    return RemoteFileState(int(match.group(1)), match.group(2))
+
+
+def remove_remote_file(answers: InstallAnswers, remote_relative: str) -> bool:
+    remote = remote_home_expression(remote_relative)
+    return run_remote_script(answers, f"rm -f -- {remote}\n").returncode == 0
+
+
+def retry_pause(attempt: int, label: str) -> None:
+    if attempt < TRANSFER_ATTEMPTS:
+        print(f"{label}尚未完成，{TRANSFER_RETRY_SECONDS} 秒后自动继续（下一次 {attempt + 1}/{TRANSFER_ATTEMPTS}）。")
+        time.sleep(TRANSFER_RETRY_SECONDS)
+
+
+def ensure_remote_directories(answers: InstallAnswers, relatives: list[str]) -> None:
+    script = "\n".join(f"mkdir -p -- {remote_home_expression(relative)}" for relative in sorted(set(relatives))) + "\n"
+    for attempt in range(1, TRANSFER_ATTEMPTS + 1):
+        if run_remote_script(answers, script).returncode == 0:
+            return
+        retry_pause(attempt, "服务器目录准备")
+    fail(f"服务器目录连续 {TRANSFER_ATTEMPTS} 次无法准备；网络恢复后重新运行，已上传文件不会丢失")
+
+
+def upload_file_resumable(
+    answers: InstallAnswers,
+    local_path: pathlib.Path,
+    remote_relative: str,
+    label: str,
+) -> None:
+    wanted = sha256_file(local_path)
+    local_size = local_path.stat().st_size
+    for attempt in range(1, TRANSFER_ATTEMPTS + 1):
+        state = remote_file_state(answers, remote_relative)
+        if state is None:
+            retry_pause(attempt, label)
+            continue
+        if state.sha256 == wanted:
+            print(f"{label}：服务器已有完整文件，跳过上传。")
+            return
+        if state.size is not None and state.size >= local_size:
+            if not remove_remote_file(answers, remote_relative):
+                retry_pause(attempt, label)
+                continue
+            state = RemoteFileState(None, "")
+
+        if state.size:
+            percentage = min(99, int(state.size * 100 / local_size)) if local_size else 0
+            print(f"{label}：从已完成的 {percentage}% 继续（尝试 {attempt}/{TRANSFER_ATTEMPTS}）。")
+        else:
+            print(f"{label}：开始上传（尝试 {attempt}/{TRANSFER_ATTEMPTS}）。")
+        operation = "put -a" if state.size else "put"
+        batch = f"{operation} {sftp_quote(str(local_path))} {sftp_quote(remote_relative)}\n"
+        transfer = subprocess.run(sftp_base(answers), input=batch, text=True, check=False)
+        if transfer.returncode != 0:
+            retry_pause(attempt, label)
+            continue
+
+        completed = remote_file_state(answers, remote_relative)
+        if completed is not None and completed.size == local_size and completed.sha256 == wanted:
+            print(f"{label}：上传和完整性校验通过。")
+            return
+        if completed is not None and completed.size is not None and completed.size >= local_size:
+            remove_remote_file(answers, remote_relative)
+        retry_pause(attempt, label)
+    fail(f"{label}连续 {TRANSFER_ATTEMPTS} 次仍未上传完成；远端进度已保留，网络恢复后重新运行会继续传输")
+
+
+def check_remote_access(answers: InstallAnswers, non_interactive: bool) -> None:
+    subprocess.run([*ssh_base(answers), "true"], check=True)
+    sudo = subprocess.run([*ssh_base(answers), "sudo", "-n", "true"], check=False)
+    if sudo.returncode != 0 and non_interactive:
+        fail("远程用户没有免密 sudo；非交互安装无法继续")
+    if sudo.returncode != 0:
+        print("提示：远程安装时服务器可能要求输入 sudo 密码。")
+
+
+def check_remote_installation_boundary(answers: InstallAnswers, media_root: pathlib.Path) -> None:
+    script = """set -eu
+state=/var/lib/copper-installer/state.json
+if sudo test -f "$state"; then
+  sudo cat "$state"
+else
+  orphaned=0
+  for path in /etc/copper /var/lib/copper /var/backups/copper /opt/copper /usr/local/sbin/copper-install /usr/local/sbin/copperctl /usr/local/sbin/copper-maintain; do
+    if sudo test -e "$path" || sudo test -L "$path"; then
+      orphaned=1
+    fi
+  done
+  if [ "$orphaned" -eq 1 ]; then
+    printf '%s\n' __COPPER_ORPHANED_STATE__
+  else
+    printf '%s\n' __COPPER_CLEAN_HOST__
+  fi
+fi
+"""
+    result = run_remote_script(answers, script, capture_output=True)
+    if result.returncode != 0:
+        fail("无法核对服务器是否为空白；不会生成密钥或上传安装文件")
+    observed = (result.stdout or "").strip()
+    if observed == "__COPPER_CLEAN_HOST__":
+        print("服务器安装边界检查通过：未发现旧站点、旧记录或失效入口。")
+        return
+    if observed == "__COPPER_ORPHANED_STATE__":
+        fail("服务器存在旧 Copper 目录、记录或失效入口；为防止覆盖数据，本次不会上传")
+    try:
+        state = json.loads(observed)
+    except json.JSONDecodeError as error:
+        raise LocalInstallError("服务器安装边界返回了无法识别的状态；本次不会上传") from error
+    expected = {
+        "installerVersion": INSTALLER_VERSION,
+        "releaseVersion": operator_value(media_root, "COPPER_RELEASE_VERSION"),
+        "deployCommit": operator_value(media_root, "COPPER_DEPLOY_COMMIT"),
+        "siteId": answers.site_id,
+        "domain": answers.domain,
+        "publicIpv4": answers.public_ip,
+    }
+    mismatches = [key for key, wanted in expected.items() if str(state.get(key) or "") != wanted]
+    if mismatches:
+        fail("服务器保留的是另一站点或另一版本的安装记录；本次不会生成密钥或上传")
+    print("服务器存在与本次完全一致的受管安装记录，将按原阶段安全继续。")
+
+
+def answers_document(answers: InstallAnswers, recipient: str) -> dict[str, str]:
+    return {
+        "siteId": answers.site_id,
+        "domain": answers.domain,
+        "publicIp": answers.public_ip,
+        "backupPublicKey": recipient,
+        "timeZone": answers.time_zone,
+    }
+
+
+def media_identity(media_root: pathlib.Path) -> str:
+    return sha256_file(media_root / "SHA256SUMS")[:16]
+
+
+def operator_value(media_root: pathlib.Path, key: str) -> str:
+    matches: list[str] = []
+    for raw in (media_root / "OPERATOR_VALUES.env").read_text(encoding="utf-8").splitlines():
+        if raw.startswith(f"{key}="):
+            matches.append(raw.split("=", 1)[1])
+    if len(matches) != 1 or not matches[0]:
+        fail(f"安装介质缺少唯一的 {key}")
+    return matches[0]
+
+
+def remote_reusable_image_archives(
+    answers: InstallAnswers,
+    media_root: pathlib.Path,
+) -> set[pathlib.PurePosixPath]:
+    """Return image archives that need not be transferred to this exact host.
+
+    Reuse is content-addressed: an image is eligible only when Docker can read
+    the exact imported image ID from the signed medium and reports amd64.  A
+    similarly named image, an arbitrary MySQL installation, or a tag alone is
+    never enough.
+    """
+    records: list[tuple[str, pathlib.PurePosixPath, str]] = []
+    for role in ("WEB", "BACKEND", "MYSQL"):
+        archive_text = operator_value(media_root, f"COPPER_{role}_ARCHIVE")
+        archive = pathlib.PurePosixPath(archive_text)
+        if archive.is_absolute() or ".." in archive.parts or not archive.parts:
+            fail(f"安装介质中的 {role.lower()} 文件路径不安全")
+        image_id = operator_value(media_root, f"COPPER_{role}_IMAGE")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            fail(f"安装介质中的 {role.lower()} 镜像身份不正确")
+        records.append((role.lower(), archive, image_id))
+
+    lines = [
+        "set -eu",
+        "command -v docker >/dev/null 2>&1 || exit 0",
+        "sudo -n docker info >/dev/null 2>&1 || exit 0",
+    ]
+    for role, _archive, image_id in records:
+        lines.extend(
+            [
+                f"observed=$(sudo -n docker image inspect --format '{{{{.Id}}}}|{{{{.Architecture}}}}' {shlex.quote(image_id)} 2>/dev/null || true)",
+                f"[ \"$observed\" != {shlex.quote(image_id + '|amd64')} ] || printf '%s\\n' {shlex.quote(role)}",
+            ]
+        )
+    result = run_remote_script(answers, "\n".join(lines) + "\n", capture_output=True)
+    if result.returncode != 0:
+        print("服务器镜像盘点暂不可用，将按完整安装上传所需运行文件。")
+        return set()
+    reusable_roles = {line.strip() for line in (result.stdout or "").splitlines() if line.strip()}
+    result_paths = {archive for role, archive, _image_id in records if role in reusable_roles}
+    for role, archive, _image_id in records:
+        if archive in result_paths:
+            print(f"{role}：服务器已有完全相同的运行文件，跳过上传。")
+        else:
+            print(f"{role}：服务器没有完全相同的运行文件，本次需要上传。")
+    return result_paths
+
+
+def resume_state_path() -> pathlib.Path:
+    return pathlib.Path.home() / "Library" / "Application Support" / "Copper Installer" / "unfinished-install.json"
+
+
+def site_profile_path(site_id: str) -> pathlib.Path:
+    return (
+        pathlib.Path.home()
+        / "Library"
+        / "Application Support"
+        / "Copper Installer"
+        / "sites"
+        / f"{site_id}.json"
+    )
+
+
+def save_site_profile(
+    path: pathlib.Path,
+    answers: InstallAnswers,
+    media_root: pathlib.Path,
+    primary_key_directory: pathlib.Path,
+    backup_key_directory: pathlib.Path,
+) -> None:
+    if path.is_symlink():
+        fail(f"站点维护记录不安全：{path}")
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    document = {
+        "format": PROFILE_FORMAT,
+        "installerVersion": INSTALLER_VERSION,
+        "siteId": answers.site_id,
+        "domain": answers.domain,
+        "publicIp": answers.public_ip,
+        "sshHost": answers.ssh_host,
+        "sshUser": answers.ssh_user,
+        "sshKey": str(answers.ssh_key),
+        "customerReference": answers.customer_reference,
+        "primaryKeyDirectory": str(primary_key_directory),
+        "backupKeyDirectory": str(backup_key_directory),
+        "mediaRoot": str(media_root),
+        "completedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".site-", dir=path.parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as writer:
+            json.dump(document, writer, ensure_ascii=False, sort_keys=True)
+            writer.write("\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def offer_post_install_guide(media_root: pathlib.Path, site_id: str, interactive: bool) -> None:
+    if not interactive:
+        return
+    answer = input("\n安装已经完成。是否现在继续首次登录和数据保护？[Y/n]：").strip().lower()
+    if answer not in ("", "y", "yes"):
+        print("稍后回到本介质目录运行 ./copper-manage-from-mac 即可继续，不需要重新安装。")
+        return
+    manager = media_root / "copper-manage-from-mac"
+    result = subprocess.run([str(manager), "--site-id", site_id], check=False)
+    if result.returncode != 0:
+        print("\n安装本身已经成功；后续向导尚未完成。修正屏幕提示后重新运行 ./copper-manage-from-mac 即可继续。")
+
+
+def answers_state_document(answers: InstallAnswers) -> dict[str, str]:
+    return {
+        "siteId": answers.site_id,
+        "domain": answers.domain,
+        "publicIp": answers.public_ip,
+        "sshHost": answers.ssh_host,
+        "sshUser": answers.ssh_user,
+        "sshKey": str(answers.ssh_key),
+        "customerReference": answers.customer_reference,
+        "primaryKeyRoot": str(answers.primary_key_root),
+        "backupKeyRoot": str(answers.backup_key_root),
+        "timeZone": answers.time_zone,
+    }
+
+
+def install_answers_from_state(document: dict[str, object]) -> InstallAnswers:
+    raw = document.get("answers")
+    if not isinstance(raw, dict):
+        fail("上次安装记录缺少安装信息")
+
+    def required(name: str) -> str:
+        value = raw.get(name)
+        if not isinstance(value, str) or not value:
+            fail("上次安装记录不完整")
+        return value
+
+    ssh_key = pathlib.Path(required("sshKey")).expanduser().resolve()
+    if not ssh_key.is_file() or ssh_key.is_symlink():
+        fail(f"上次使用的 SSH 私钥已不存在，请恢复该文件后重试：{ssh_key}")
+    return InstallAnswers(
+        normalize_site_id(required("siteId")),
+        normalize_domain(required("domain")),
+        normalize_public_ipv4(required("publicIp")),
+        normalize_ssh_host(required("sshHost")),
+        normalize_ssh_user(required("sshUser")),
+        ssh_key,
+        normalize_label(required("customerReference"), "客户代号"),
+        pathlib.Path(required("primaryKeyRoot")).expanduser().resolve(),
+        pathlib.Path(required("backupKeyRoot")).expanduser().resolve(),
+        normalize_label(required("timeZone"), "时区"),
+    )
+
+
+def save_resume_state(
+    path: pathlib.Path,
+    answers: InstallAnswers,
+    current_media_identity: str,
+    phase: str,
+) -> None:
+    parent = path.parent
+    if path.is_symlink():
+        fail(f"安装恢复记录不安全：{path}")
+    if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
+        fail(f"安装恢复记录目录不安全：{parent}")
+    parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    os.chmod(parent, 0o700)
+    document = {
+        "format": RESUME_FORMAT,
+        "installerVersion": INSTALLER_VERSION,
+        "mediaIdentity": current_media_identity,
+        "status": "IN_PROGRESS",
+        "phase": phase,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "answers": answers_state_document(answers),
+    }
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".unfinished-", dir=parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as writer:
+            json.dump(document, writer, ensure_ascii=False, sort_keys=True)
+            writer.write("\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def load_resume_state(path: pathlib.Path, current_media_identity: str) -> InstallAnswers | None:
+    if path.is_symlink():
+        fail(f"安装恢复记录不安全：{path}")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        fail(f"安装恢复记录不安全：{path}")
+    metadata = path.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        fail(f"安装恢复记录权限不安全，请确保只有当前用户可读写：{path}")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or document.get("format") != RESUME_FORMAT:
+        fail("上次安装记录格式不正确；拒绝自动使用")
+    if document.get("status") != "IN_PROGRESS":
+        return None
+    if document.get("installerVersion") != INSTALLER_VERSION or document.get("mediaIdentity") != current_media_identity:
+        print("提示：发现其他版本留下的安装记录；本版本不会混用其上传进度，请重新填写一次。")
+        return None
+    return install_answers_from_state(document)
+
+
+def clear_resume_state(path: pathlib.Path) -> None:
+    if path.is_symlink():
+        fail(f"安装恢复记录不安全，未自动删除：{path}")
+    if path.exists():
+        if not path.is_file():
+            fail(f"安装恢复记录不安全，未自动删除：{path}")
+        path.unlink()
+
+
+def has_explicit_install_answers(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, name)
+        for name in (
+            "domain",
+            "public_ip",
+            "site_id",
+            "ssh_host",
+            "ssh_key",
+            "customer_reference",
+            "primary_key_root",
+            "backup_key_root",
+        )
+    )
+
+
+def resume_or_collect_answers(
+    args: argparse.Namespace,
+    current_media_identity: str,
+    state_path: pathlib.Path,
+) -> tuple[InstallAnswers, bool]:
+    interactive = not args.yes
+    previous = None
+    if interactive and not has_explicit_install_answers(args):
+        previous = load_resume_state(state_path, current_media_identity)
+    if previous is None:
+        return collect_answers(args), False
+
+    print("\n发现上次中断的 Copper 安装：")
+    print(f"  访问域名：{previous.domain}")
+    print(f"  服务器：{previous.ssh_user}@{previous.ssh_host}")
+    print(f"  站点代号：{previous.site_id}")
+    choice = choose("是否继续上次安装？", ["继续上次安装", "重新填写安装信息", "暂时退出"])
+    if choice == 1:
+        return previous, True
+    if choice == 2:
+        return collect_answers(args), False
+    fail("已保留上次安装记录；下次运行仍可继续")
+
+
+def run_remote_install(
+    answers: InstallAnswers,
+    media_root: pathlib.Path,
+    expected_files: list[pathlib.Path],
+    recipient: str,
+) -> int:
+    with tempfile.TemporaryDirectory(prefix="copper-mac-install-") as directory:
+        temporary = pathlib.Path(directory)
+        reusable_archives = remote_reusable_image_archives(answers, media_root)
+        staged = stage_verified_media(media_root, expected_files, temporary, reusable_archives)
+        current_media_identity = media_identity(staged)
+        remote_parent = f".copper-installer-media/{answers.site_id}/{INSTALLER_VERSION}-{current_media_identity}"
+        answer_file = temporary / "install-answers.json"
+        answer_file.write_text(
+            json.dumps(answers_document(answers, recipient), ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(answer_file, 0o600)
+        upload_sources = [
+            staged / "SHA256SUMS",
+            *(
+                staged / path.relative_to(media_root)
+                for path in expected_files
+                if (staged / path.relative_to(media_root)).is_file()
+            ),
+        ]
+        remote_files = [f"{remote_parent}/media/{path.relative_to(staged).as_posix()}" for path in upload_sources]
+        remote_files.append(f"{remote_parent}/install-answers.json")
+        ensure_remote_directories(
+            answers,
+            [str(pathlib.PurePosixPath(path).parent) for path in remote_files],
+        )
+        for local_path, remote_path in zip(upload_sources, remote_files[:-1]):
+            upload_file_resumable(answers, local_path, remote_path, local_path.relative_to(staged).as_posix())
+        upload_file_resumable(answers, answer_file, remote_files[-1], "安装答案")
+
+        media = remote_home_expression(f"{remote_parent}/media")
+        verification = f"cd {media}\nsha256sum -c SHA256SUMS\n"
+        for attempt in range(1, TRANSFER_ATTEMPTS + 1):
+            if run_remote_script(answers, verification).returncode == 0:
+                break
+            retry_pause(attempt, "服务器安装文件总校验")
+        else:
+            fail(f"服务器安装文件连续 {TRANSFER_ATTEMPTS} 次无法完成总校验；文件已保留，可重新运行继续")
+
+    remote_script = f"""set -eu
+answers=\"$HOME/{remote_parent}/install-answers.json\"
+trap 'rm -f \"$answers\"' EXIT HUP INT TERM
+chmod 600 \"$answers\"
+cd \"$HOME/{remote_parent}/media\"
+sudo ./copper-install install --answers \"$answers\" --yes
+"""
+    result = subprocess.run(
+        [*ssh_base(answers, tty=True), "bash", "-lc", shlex.quote(remote_script)],
+        check=False,
+    )
+    if result.returncode == 0:
+        release_version = operator_value(media_root, "COPPER_RELEASE_VERSION")
+        expected_site = shlex.quote(answers.site_id)
+        expected_domain = shlex.quote(answers.domain)
+        expected_release = shlex.quote(release_version)
+        verification_script = f"""set -eu
+read_env() {{
+  sudo awk -F= -v key="$1" '$1 == key {{print substr($0, index($0, "=") + 1); exit}}' /etc/copper/copper.env
+}}
+test "$(read_env COPPER_SITE_ID)" = {expected_site}
+test "$(read_env COPPER_DOMAIN)" = {expected_domain}
+test "$(read_env COPPER_RELEASE_VERSION)" = {expected_release}
+for entry in copper-install copperctl copper-maintain; do
+  sudo test -L "/usr/local/sbin/$entry"
+  target="$(sudo readlink -f "/usr/local/sbin/$entry")"
+  sudo test -x "$target"
+done
+sudo copper-install status
+sudo copperctl status >/dev/null
+for service in mysql backend web; do
+  test "$(sudo docker inspect --format '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}{{{{else}}}}{{{{.State.Status}}}}{{{{end}}}}' "copper-$service-1")" = healthy
+done
+"""
+        verification = run_remote_script(answers, verification_script)
+        if verification.returncode != 0:
+            print("\n安装程序返回成功，但安装后固定入口、站点身份或三层健康复查未通过。")
+            print("本次不会保存站点记录，也不会进入首次登录向导。")
+            result = subprocess.CompletedProcess(result.args, verification.returncode or 3)
+    else:
+        print(f"\n远程安装已停止，退出码：{result.returncode}")
+        print(f"安装文件保留在服务器：~/{remote_parent}/media")
+    return result.returncode
+
+
+def collect_answers(args: argparse.Namespace) -> InstallAnswers:
+    interactive = not args.yes
+    supplied = all((args.domain, args.public_ip, args.ssh_host, args.ssh_user, args.ssh_key))
+    if args.yes and not supplied:
+        fail("--yes 模式必须同时提供域名、公网 IP、SSH 地址、登录用户名和 SSH 私钥路径")
+    domain = normalize_domain(args.domain or prompt("域名或固定公网 IPv4（可粘贴 https:// 地址）"))
+    default_site = default_site_id(domain)
+    site_id = normalize_site_id(args.site_id or prompt("站点代号", default_site))
+    public_ip = normalize_public_ipv4(args.public_ip or prompt("服务器公网 IPv4"))
+    ssh_host = normalize_ssh_host(args.ssh_host or prompt("SSH 服务器地址", public_ip))
+    ssh_user = normalize_ssh_user(args.ssh_user or prompt("服务器登录用户名", "ubuntu"))
+    ssh_key = pathlib.Path(args.ssh_key or prompt("SSH 私钥文件位置")).expanduser().resolve()
+    if not ssh_key.is_file() or ssh_key.is_symlink():
+        fail(f"SSH 私钥文件不存在或不安全：{ssh_key}")
+    customer_reference = normalize_label(args.customer_reference or site_id, "客户代号")
+    primary_root = pathlib.Path(
+        args.primary_key_root or "~/Documents/Copper-Recovery-Keys"
+    ).expanduser().resolve()
+    backup_value = args.backup_key_root
+    if not backup_value:
+        if not interactive:
+            fail("--yes 模式必须提供第二份私钥备份目录 --backup-key-root")
+        backup_value = prompt(
+            "第二份私钥备份位置（可填外接盘上级目录或已含站点代号的最终目录，"
+            "例如 /Volumes/USB/Copper-Recovery-Keys）"
+        )
+    backup_root = pathlib.Path(backup_value).expanduser().resolve()
+    time_zone = args.time_zone or "Asia/Shanghai"
+    return InstallAnswers(
+        site_id,
+        domain,
+        public_ip,
+        ssh_host,
+        ssh_user,
+        ssh_key,
+        customer_reference,
+        primary_root,
+        backup_root,
+        time_zone,
+    )
+
+
+def show_plan(answers: InstallAnswers, independent_filesystem: bool | None = None) -> None:
+    primary_directory, _ = planned_key_directory(answers.primary_key_root, answers.site_id)
+    backup_directory, _ = planned_key_directory(answers.backup_key_root, answers.site_id)
+    print("\nMac 一键远程安装计划")
+    print("=" * 60)
+    print(f"访问地址：https://{answers.domain}")
+    print(f"服务器：{answers.ssh_user}@{answers.ssh_host}（公网 IP {answers.public_ip}）")
+    print(f"站点代号：{answers.site_id}")
+    print(f"主恢复私钥目录：{primary_directory}")
+    print(f"第二份私钥目录：{backup_directory}")
+    if independent_filesystem is not None:
+        print("私钥副本：" + ("位于不同文件系统" if independent_filesystem else "同一文件系统，仅满足内部演练"))
+    print("私钥不会写入安装答案、安装介质或服务器。")
+    print("=" * 60)
+
+
+def confirm_install(site_id: str, yes: bool) -> None:
+    if yes:
+        return
+    expected = f"INSTALL {site_id}"
+    print("请完整输入下面双引号内的确认文字；双引号本身不用输入：")
+    print(f'"{expected}"')
+    if input("确认文字：").strip() != expected:
+        fail("确认文字不一致；尚未生成密钥或上传文件")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="从 Mac 生成恢复密钥、备份私钥并远程安装 Copper")
+    parser.add_argument("--domain")
+    parser.add_argument("--public-ip")
+    parser.add_argument("--site-id")
+    parser.add_argument("--ssh-host")
+    parser.add_argument("--ssh-user")
+    parser.add_argument("--ssh-key")
+    parser.add_argument("--customer-reference")
+    parser.add_argument(
+        "--primary-key-root",
+        help="主私钥的上级目录，或已含站点代号的最终目录",
+    )
+    parser.add_argument(
+        "--backup-key-root",
+        help="第二份私钥的上级目录，或已含站点代号的最终目录",
+    )
+    parser.add_argument("--time-zone", default="Asia/Shanghai")
+    parser.add_argument("--allow-same-disk-backup", action="store_true")
+    parser.add_argument("--yes", action="store_true", help="用于可重复内部验收；必须同时提供所有安装信息")
+    parser.add_argument("--dry-run", action="store_true", help="只检查介质、输入、DNS 和 SSH，不生成私钥或上传")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    interactive = not args.yes
+    media_root = pathlib.Path(__file__).resolve().parent
+    print("Copper Mac 一键远程安装（INTERNAL_REHEARSAL_ONLY）")
+    require_local_tools(interactive)
+    expected_files = verify_local_media(media_root)
+    current_media_identity = media_identity(media_root)
+    state_path = resume_state_path()
+    answers, resumed = resume_or_collect_answers(args, current_media_identity, state_path)
+    values = {"domain": answers.domain, "publicIp": answers.public_ip, "sshHost": answers.ssh_host}
+    validate_dns_with_choices(values, interactive)
+    if values != {"domain": answers.domain, "publicIp": answers.public_ip, "sshHost": answers.ssh_host}:
+        resumed = False
+        answers = InstallAnswers(
+            answers.site_id,
+            values["domain"],
+            values["publicIp"],
+            values["sshHost"],
+            answers.ssh_user,
+            answers.ssh_key,
+            answers.customer_reference,
+            answers.primary_key_root,
+            answers.backup_key_root,
+            answers.time_zone,
+        )
+    show_plan(answers)
+    if resumed:
+        print("已选择继续上次安装，不再重复输入确认文字。")
+    else:
+        confirm_install(answers.site_id, args.yes)
+    if not args.dry_run:
+        save_resume_state(state_path, answers, current_media_identity, "confirmed")
+    check_remote_access(answers, args.yes)
+    check_remote_installation_boundary(answers, media_root)
+    if args.dry_run:
+        print("检查通过；--dry-run 未生成私钥、未上传文件、未修改服务器。")
+        return 0
+    save_resume_state(state_path, answers, current_media_identity, "remote-ready")
+    recipient, primary, backup, independent = prepare_recovery_keys(
+        media_root,
+        answers.site_id,
+        answers.customer_reference,
+        answers.primary_key_root,
+        answers.backup_key_root,
+        args.allow_same_disk_backup,
+        interactive,
+    )
+    save_resume_state(state_path, answers, current_media_identity, "keys-ready")
+    show_plan(answers, independent)
+    save_resume_state(state_path, answers, current_media_identity, "uploading")
+    result = run_remote_install(answers, media_root, expected_files, recipient)
+    if result == 0:
+        profile_path = site_profile_path(answers.site_id)
+        save_site_profile(profile_path, answers, media_root, primary, backup)
+        clear_resume_state(state_path)
+        print("\n安装后的固定入口：")
+        print(f"  登录地址：https://{answers.domain}")
+        print("  继续首次登录和数据保护：./copper-manage-from-mac")
+        print(f"  本机站点记录：{profile_path}")
+        print("程序会先指导授权管理员改密，再完成备份下载、离线验证和第二位置复制。")
+        offer_post_install_guide(media_root, answers.site_id, interactive)
+    else:
+        save_resume_state(state_path, answers, current_media_identity, "remote-install-paused")
+    print("\n客户恢复密钥保存在：")
+    print(f"  主副本：{primary}")
+    print(f"  第二份：{backup}")
+    print("请勿把 copper-age-identity.txt 上传到服务器、聊天或工单。")
+    return result
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (LocalInstallError, OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        print(f"\n安装已停止：{error}", file=sys.stderr)
+        print("已生成的本地密钥不会删除或覆盖；如果已确认安装计划，下次运行会优先询问是否继续。", file=sys.stderr)
+        raise SystemExit(3)

@@ -1,0 +1,26 @@
+[
+  {
+    "repo": "soyia/copper_backend",
+    "head": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9",
+    "mainSourceLicenseFileExists": false,
+    "ordinaryBranchRefs": 27,
+    "prHeadRefs": 75,
+    "tagRefs": 0
+  },
+  {
+    "repo": "soyia/copper_web",
+    "head": "d497d7958e6148cd31a47248fc36c85f2e0c24ed",
+    "mainSourceLicenseFileExists": false,
+    "ordinaryBranchRefs": 36,
+    "prHeadRefs": 126,
+    "tagRefs": 0
+  },
+  {
+    "repo": "soyia/copper_deploy",
+    "head": "e791e0a618fced8d7591356758aa145aa00b626c",
+    "mainSourceLicenseFileExists": false,
+    "ordinaryBranchRefs": 15,
+    "prHeadRefs": 116,
+    "tagRefs": 0
+  }
+]

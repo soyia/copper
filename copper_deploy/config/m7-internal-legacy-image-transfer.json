@@ -1,0 +1,15 @@
+{
+  "formatVersion": "copper-m7-internal-legacy-image-transfer/v1",
+  "status": "INTERNAL_REHEARSAL_ONLY",
+  "images": [
+    {
+      "role": "mysql",
+      "sourceCommit": "dee92c23c59de1e80f1adee00e938773b94ac396",
+      "sourceTag": "ghcr.io/soyia/copper_mysql:sha-dee92c23c59de1e80f1adee00e938773b94ac396",
+      "deliveryTag": "ghcr.io/soyia/copper_mysql:m6-delivery-dee92c23c59de1e80f1adee00e938773b94ac396-amd64",
+      "expectedLocalId": "sha256:5c84096b42d50bb23bc635e6857e95339f45a96b2589c037612296cd2c993a2f",
+      "reviewedEvidence": "docs/M7_04_UPGRADE_RECOVERY_CONTINUITY_EVIDENCE.md",
+      "reason": "Required to restore an encrypted M7 rehearsal backup created before the M6 single-root history rebuild"
+    }
+  ]
+}

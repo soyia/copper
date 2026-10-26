@@ -1,0 +1,52 @@
+{
+  "formatVersion": "copper-egress-policy/v1",
+  "coreBusinessInternetRequired": false,
+  "vendorControl": {
+    "licenseHeartbeat": false,
+    "mandatoryTelemetry": false,
+    "remoteKillSwitch": false,
+    "officialServiceEndpoints": []
+  },
+  "conditionalDependencies": [
+    {
+      "id": "tls.acme",
+      "purpose": "公开域名证书首次签发和自动续期",
+      "activation": "standard-domain-tls",
+      "destination": "Caddy 配置的公开 ACME CA",
+      "data": "域名、证书签名请求、ACME 账户公钥；不发送经营数据",
+      "coreFailureImpact": "现有有效证书期内核心业务继续运行；续期失败进入证书告警"
+    },
+    {
+      "id": "backup.s3",
+      "purpose": "把客户公钥加密后的整站备份复制到客户指定对象存储",
+      "activation": "backup-target-s3",
+      "destination": "COPPER_BACKUP_S3_ENDPOINT",
+      "data": "copper-backup/v1 加密包、公开校验元数据；不发送解密私钥",
+      "coreFailureImpact": "本地核心业务继续运行；S3 备份失败明确告警且不冒充成功"
+    },
+    {
+      "id": "monitor.webhook",
+      "purpose": "向客户指定告警接收端发送运维状态",
+      "activation": "monitor-alert-webhook",
+      "destination": "root-only 通知凭据中的客户 Webhook",
+      "data": "信号编号、等级、时间和处置提示；不发送密码、令牌或业务明细",
+      "coreFailureImpact": "本机监控和核心业务继续运行；通知失败写入本地状态与历史"
+    },
+    {
+      "id": "release.online-delivery",
+      "purpose": "由管理员主动下载发布清单和不可变镜像",
+      "activation": "online-image-delivery",
+      "destination": "管理员明确提供的 HTTPS 发布地址和清单绑定镜像仓库",
+      "data": "产品版本、镜像摘要和标准 HTTPS 请求元数据；不发送客户业务数据",
+      "coreFailureImpact": "已安装版本继续运行；不能联网时改用正式离线交付介质"
+    },
+    {
+      "id": "remote-access.cloudflare",
+      "purpose": "让经授权用户通过 Cloudflare Tunnel 和 Access 访问客户 LAN 内的 Copper Web",
+      "activation": "cloudflare-remote-access-enabled",
+      "destination": "Cloudflare Tunnel、DNS 与 Access 服务",
+      "data": "经授权用户的 ERP HTTP 请求、响应和附件会经过 Cloudflare；Tunnel token 只保存在客户服务器 root-only 文件中",
+      "coreFailureImpact": "互联网远程访问降级或停止；LAN 内采购、库存、销售、资金和备份继续运行"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "format": "copper-security-exceptions/v1",
+  "releaseVersion": "0.0.0-rc.1",
+  "exceptions": [
+    {
+      "vulnerabilityId": "CVE-YYYY-NNNN",
+      "artifactRole": "backend-image",
+      "packageName": "example-package",
+      "installedVersion": "1.0.0",
+      "severity": "High",
+      "disposition": "RISK_ACCEPTED",
+      "owner": "named-maintainer",
+      "reason": "False positive or temporarily not exploitable, with technical evidence.",
+      "compensatingControl": "Concrete temporary control that reduces the documented risk.",
+      "evidenceFile": "reviewed-evidence.json.gz",
+      "evidenceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expiresAt": "2099-01-01T00:00:00Z"
+    }
+  ]
+}

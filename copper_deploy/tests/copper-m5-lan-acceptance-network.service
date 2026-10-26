@@ -1,0 +1,18 @@
+[Unit]
+Description=Copper M5 LAN acceptance-only private network and DNS
+Before=copper.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=COPPER_M5_LAN_STATE_ROOT=/opt/copper-m5-04-acceptance
+Environment=COPPER_M5_LAN_RELEASE_ROOT=/opt/copper-m5-04-release
+ExecStart=/opt/copper-m5-04-release/tests/m5-lan-acceptance-network.sh start
+ExecStop=/opt/copper-m5-04-release/tests/m5-lan-acceptance-network.sh stop
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,92 @@
+spring:
+  application:
+    name: copper-v2
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${COPPER_DB_URL}
+    username: ${COPPER_DB_USERNAME}
+    password: ${COPPER_DB_PASSWORD}
+    hikari:
+      connection-init-sql: "SET time_zone = '${COPPER_DB_TIME_ZONE_OFFSET:+08:00}'"
+  sql:
+    init:
+      mode: never
+  flyway:
+    enabled: ${COPPER_FLYWAY_ENABLED:true}
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    clean-disabled: true
+    baseline-on-migrate: ${COPPER_FLYWAY_BASELINE_ON_MIGRATE:false}
+  servlet:
+    multipart:
+      max-file-size: 30MB
+      max-request-size: 32MB
+      location: ${COPPER_UPLOAD_TEMP_PATH}
+  jackson:
+    time-zone: ${COPPER_TIME_ZONE}
+
+server:
+  port: ${COPPER_PORT}
+  forward-headers-strategy: framework
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+  servlet:
+    context-path: /api
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState,ping
+        readiness:
+          include: readinessState,db
+      show-details: never
+
+copper:
+  runtime:
+    data-root: ${COPPER_DATA_ROOT}
+  file-storage:
+    root-path: ${COPPER_FILE_STORAGE_PATH}
+  export:
+    root-path: ${COPPER_EXPORT_PATH:${COPPER_DATA_ROOT}/exports}
+  storage:
+    capacity-file: ${COPPER_STORAGE_CAPACITY_FILE:${COPPER_DATA_ROOT}/runtime/storage-capacity.json}
+  ocr:
+    enabled: ${COPPER_OCR_ENABLED:true}
+    endpoint: ${COPPER_OCR_ENDPOINT:http://127.0.0.1:8080/ocr}
+    engine: ${COPPER_OCR_ENGINE:PADDLEOCR_LOCAL}
+    model: ${COPPER_OCR_MODEL:PP-OCRv6-medium}
+    timeout-seconds: ${COPPER_OCR_TIMEOUT_SECONDS:120}
+  time-safety:
+    file: ${COPPER_TIME_SAFETY_FILE:}
+  bootstrap:
+    username: ${COPPER_BOOTSTRAP_USERNAME:admin}
+    credential-file: ${COPPER_BOOTSTRAP_CREDENTIAL_FILE}
+  security:
+    allowed-origins: ${COPPER_ALLOWED_ORIGINS}
+    allow-private-network-origins: ${COPPER_ALLOW_PRIVATE_NETWORK_ORIGINS:false}
+    session:
+      hours: ${COPPER_SESSION_HOURS:12}
+      max-active: ${COPPER_MAX_ACTIVE_SESSIONS:5}
+    cookie:
+      secure: ${COPPER_COOKIE_SECURE}
+      same-site: ${COPPER_COOKIE_SAME_SITE}
+      path: /api
+
+logging:
+  file:
+    name: ${COPPER_LOG_FILE}
+  level:
+    root: ${COPPER_LOG_LEVEL}
+    com.soyia.copperv2: ${COPPER_LOG_LEVEL}
+    org.springframework.jdbc.core.JdbcTemplate: WARN
+    org.springframework.jdbc.core.StatementCreatorUtils: OFF

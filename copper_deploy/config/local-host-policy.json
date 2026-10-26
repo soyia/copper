@@ -1,0 +1,41 @@
+{
+  "format": "copper-local-host-policy/v1",
+  "profiles": {
+    "ubuntu-24.04-x86_64": {
+      "supportStatus": "candidate",
+      "osId": "ubuntu",
+      "osVersion": "24.04",
+      "architecture": "x86_64",
+      "minimumCpuCount": 2,
+      "minimumMemoryBytes": 3891200000,
+      "minimumAvailableBytes": 21474836480,
+      "dockerEngineMajor": 29,
+      "composeMajor": 5,
+      "dataPath": "/var/lib/copper",
+      "allowedFilesystems": [
+        "ext4",
+        "xfs",
+        "btrfs"
+      ]
+    }
+  },
+  "forbiddenDataFilesystems": [
+    "9p",
+    "cifs",
+    "davfs",
+    "davfs2",
+    "fuse.sshfs",
+    "nfs",
+    "nfs4",
+    "smb3",
+    "sshfs"
+  ],
+  "blockingHostPorts": [
+    80,
+    443
+  ],
+  "internalReviewPorts": [
+    3306,
+    8191
+  ]
+}

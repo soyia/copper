@@ -1,0 +1,57 @@
+{
+  "format": "copper-public-source-origin/v1",
+  "version": "0.4.0-rc.11",
+  "edition": "source-prerelease",
+  "publicRepository": "https://github.com/soyia/copper",
+  "license": "AGPL-3.0-only",
+  "ownerSelectedAt": "2026-10-26",
+  "components": {
+    "copper_backend": {
+      "privateSourceRepository": "https://github.com/soyia/copper_backend",
+      "commit": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9",
+      "tree": "c8dd483fd24cf29b6dcfca98dbd9dd851fac0fdd",
+      "publishedDirectory": "copper_backend",
+      "trackedFiles": 386,
+      "gitHistoryImported": false
+    },
+    "copper_web": {
+      "privateSourceRepository": "https://github.com/soyia/copper_web",
+      "commit": "d497d7958e6148cd31a47248fc36c85f2e0c24ed",
+      "tree": "1a2840b068d185eb27d16dac9689c2ff97d6aee6",
+      "publishedDirectory": "copper-web",
+      "trackedFiles": 305,
+      "gitHistoryImported": false
+    },
+    "copper_deploy": {
+      "privateSourceRepository": "https://github.com/soyia/copper_deploy",
+      "commit": "7f44f09924f51e950b07b36921140e24e1269f3a",
+      "tree": "c010a7f3b1a02bf012d1a920e01ddd32206173be",
+      "publishedDirectory": "copper_deploy",
+      "trackedFiles": 377,
+      "gitHistoryImported": false
+    }
+  },
+  "originalTrackedFileCount": 1068,
+  "runtimeBuildProvenance": {
+    "backendCommit": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9",
+    "webCommit": "d497d7958e6148cd31a47248fc36c85f2e0c24ed",
+    "deployRuntimeCommit": "f74b32c01360e68a8b2fc843bec95c4999be9893",
+    "deployMetadataFreezeCommit": "10b01725e653fffa5c2113f8cb49d4dbbcb9c048",
+    "actualInternalBuildRunId": "50e31e28136b",
+    "publicSourceCommitIsNotAnOldImageBuildCommit": true
+  },
+  "originalRuntimeSourceBytesChanged": false,
+  "packagingOnlyModifiedFiles": [
+    "copper_deploy/.gitattributes"
+  ],
+  "oldGitHistoryOrPlatformObjectsImported": false,
+  "oldPlatformHistoryDispositionChanged": false,
+  "binaryAssetsDistributed": false,
+  "separateCommercialExceptionGranted": false,
+  "licenseText": {
+    "source": "https://github.com/spdx/license-list-data/blob/main/text/AGPL-3.0-only.txt",
+    "gitBlob": "0c97efd25b5974b974ed9a8a18207bc4f55bb338",
+    "bytes": 34020,
+    "sha256": "d8a6cc31abc16b6748c7a21f21611f5a1ec33f67d22ca23d7da1c19b95496bee"
+  }
+}

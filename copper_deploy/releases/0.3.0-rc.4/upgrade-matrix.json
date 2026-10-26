@@ -1,0 +1,14 @@
+{
+  "format": "copper-upgrade-matrix/v1",
+  "targetVersion": "0.3.0-rc.4",
+  "targetSchema": "5",
+  "sources": [
+    {
+      "version": "0.2.0-rc.1",
+      "schema": "4",
+      "mode": "retained-sidecar",
+      "downtimeClass": "maintenance-window",
+      "rollbackMode": "retained-sidecar-or-verified-backup"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "format": "copper-public-source-exact-artifact-review/v1",
+  "recordedAt": "2026-10-26",
+  "reviewer": "Copper release engineering, independently cross-checked by backend and delivery agents",
+  "humanLegalOrCustomerApprovalClaimed": false,
+  "sourceArchiveSha256": [
+    "15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb",
+    "2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d"
+  ],
+  "evidenceOrdinaryFiles": 157,
+  "frozenDriverOrdinaryFiles": 15,
+  "review": "Exact synthetic acceptance files and frozen source driver. Existing inventories, original SHA256 and all ordinary member bytes matched; no .copperbak payloads, private age identity or customer business records. Six API reports declare synthetic data.",
+  "oldPlatformHistoryApproved": false,
+  "approvedFindingIds": [
+    "33b49fdb3c83fa9bb9042ef2509d4dd0d2a30e6aa652a8691f7c35287cb4811f",
+    "db955276752aec25b91897b76670951ee49e6f5061a3913a248c694e464f2981",
+    "49ecdd587fda91fb3768ab77cffda27f2dc7a1c10e7ad0ca99a5b27ef78ee9c1",
+    "9d453f4d247646796f21b19fcc7d42ebd1d44a80d3b9a10b2b4d0f6618b9c824"
+  ],
+  "policyRulesRemovedOrBroadened": false
+}

@@ -1,0 +1,30 @@
+services:
+  web:
+    ports: !override
+      - name: lan-http
+        target: 80
+        published: "80"
+        host_ip: ${COPPER_LAN_BIND_IP:?COPPER_LAN_BIND_IP is required for LAN mode}
+        protocol: tcp
+        mode: host
+      - name: lan-https
+        target: 443
+        published: "443"
+        host_ip: ${COPPER_LAN_BIND_IP:?COPPER_LAN_BIND_IP is required for LAN mode}
+        protocol: tcp
+        mode: host
+      - name: lan-https-udp
+        target: 443
+        published: "443"
+        host_ip: ${COPPER_LAN_BIND_IP:?COPPER_LAN_BIND_IP is required for LAN mode}
+        protocol: udp
+        mode: host
+    volumes:
+      - type: bind
+        source: ./config/Caddyfile.lan
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ${COPPER_ETC_DIR:-/etc/copper}/tls
+        target: /etc/copper/tls
+        read_only: true

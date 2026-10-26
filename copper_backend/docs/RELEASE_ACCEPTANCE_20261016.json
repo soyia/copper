@@ -1,0 +1,108 @@
+{
+  "format": "copper-rc7-backend-acceptance/v1",
+  "date": "2026-10-16",
+  "candidate": "0.4.0-rc.7",
+  "scope": "ENGINEERING_SOURCE_CANDIDATE",
+  "status": "PASS",
+  "runtime": {
+    "java": "17.0.12",
+    "mysql": "8.4.11",
+    "databaseIsolation": "owned-disposable-loopback-33067",
+    "production8191Touched": false
+  },
+  "tests": {
+    "unitAndContract": {
+      "tests": 227,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "currentBusinessMySql": {
+      "suites": 22,
+      "tests": 97,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "coreMigrationMySql": {
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "committedRecoveryFixture": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "database": {
+    "flywayVersion": 68,
+    "migrationFiles": 67,
+    "foreignKeys": 92,
+    "newV67ForeignKeys": 54,
+    "restoreProtectedMappings": 78,
+    "orphans": 0,
+    "oldMigrationsChanged": false
+  },
+  "deferredByOwner": {
+    "browserAndMobile": "NONBLOCKING_DEFERRED",
+    "externalLegalAndAccounting": "NONBLOCKING_DEFERRED",
+    "independentCustomerInstaller": "NONBLOCKING_DEFERRED",
+    "customerKeyWitnessAndHandover": "NONBLOCKING_DEFERRED"
+  },
+  "optionalOcrEngineLiveTest": "NOT_RUN_OPTIONAL_ENGINE_NOT_STARTED",
+  "githubActions": "NOT_RUN_BY_POLICY",
+  "legacyProductionData": "NOT_ACCESSED_OR_CHANGED; read-only audit and fail-closed upgrade preflights supplied",
+  "logs": {
+    "backend-unit-final.log": {
+      "sha256": "eb21f741f6ee4ac3496815ddbeee340a37f6b3da63877f7a3fbcc97f1532497c"
+    },
+    "current-release-mysql-final.log": {
+      "sha256": "d9058cb1c128959606bb54b6bf70dfae9e4b069e08a95647020e4b8400a712f8"
+    },
+    "core-integrity-final.log": {
+      "sha256": "c4fd12a8bc9e0c2e07b194b20c73039e42c8cf4158c919b0f05b1bdeef4ac9f2"
+    },
+    "committed-business-recovery-fixture-v2.log": {
+      "sha256": "19ac82a6e31e78dec307a57662746169c13d112713f3b6542fbbe5edefb3cedf"
+    }
+  },
+  "encryptedLogicalRecovery": {
+    "format": "copper-native-logical-roundtrip/v1",
+    "status": "PASS",
+    "scope": "SUPPLEMENTAL_NATIVE_MYSQL_TEST_NOT_COMPOSE_OR_COPPER_BACKUP_V1",
+    "databaseVersion": "8.4.11",
+    "actualFlywayVersion": "68",
+    "tableCount": 256,
+    "rowCount": 3999,
+    "attachmentFileCount": 2,
+    "attachmentReferenceCount": 2,
+    "allRowContentSha256": "098eaed56067318d41615c2c3cbd9bceea0dcf0481e00dca6efe7038478a606a",
+    "encryptedTestArchiveSha256": "630ed3360987ac330f186847f76775d887e260eff26c67740dd93e59b78ea395",
+    "sourceForeignKeyCount": 92,
+    "restoredForeignKeyCount": 92,
+    "protectedCoreMappings": 78,
+    "foreignKeyOrphans": 0,
+    "v68SourceIdentity": {
+      "nextId": 1,
+      "highestReference": 0,
+      "uniqueIndexPresent": true
+    },
+    "v68RestoredIdentity": {
+      "nextId": 1,
+      "highestReference": 0,
+      "uniqueIndexPresent": true
+    },
+    "productionCountsTotalsAttachmentsEqual": true,
+    "completeRowContentEqual": true,
+    "exactAgeDecryptBytesEqual": true,
+    "sourceUnchanged": true,
+    "customerDataUsed": false,
+    "customerPrivateKeyUsed": false,
+    "productionPortTouched": false,
+    "ownedTargetDatabaseRemoved": true,
+    "temporaryPrivateKeyAndFilesRemoved": true
+  }
+}

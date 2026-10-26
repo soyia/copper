@@ -1,0 +1,21 @@
+{
+  "format": "copper-release-data-safety/v1",
+  "status": "PASS",
+  "databaseVersion": "8.4.11",
+  "checks": [
+    "ten_attachment_sources_and_metadata_pass",
+    "electronic_credential_missing_rejected",
+    "electronic_credential_tampering_rejected",
+    "electronic_credential_verification_missing_rejected",
+    "electronic_credential_verification_tampering_rejected",
+    "product_import_job_missing_rejected",
+    "product_import_job_tampering_rejected",
+    "document_intake_batch_missing_rejected",
+    "document_intake_batch_tampering_rejected",
+    "older_schema_optional_sources_pass",
+    "package_remaining_multiitem_cost_pending_signature_totals_pass"
+  ],
+  "customerDataUsed": false,
+  "servicesStarted": false,
+  "ownedDatabaseRemoved": true
+}

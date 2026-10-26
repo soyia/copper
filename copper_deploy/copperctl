@@ -1,0 +1,515 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+VERSION="0.12.0-m5"
+
+if [[ "${1:-}" == "--env-file" ]]; then
+  [[ -n "${2:-}" ]] || { echo "错误：--env-file 缺少路径" >&2; exit 2; }
+  export COPPER_ENV_FILE="$2"
+  shift 2
+fi
+
+source "$ROOT_DIR/scripts/lib.sh"
+
+usage() {
+  cat <<'EOF'
+用法：sudo copperctl [--env-file PATH] <命令>
+
+命令：
+  install                    前置检查、准备目录和密钥、启动并等待健康
+  host preflight [--profile PROFILE] [--json]
+                             只读检查本地主机、资源、端口、数据盘和重装状态
+  host autostart <命令>      安装、检查或禁用 Ubuntu 主服务自启动
+  lan preflight [--json]    只读检查固定私网地址、DNS、客户 CA 证书和网卡
+  lan status [--json]       检查 LAN 身份、HTTPS 与 Docker 防火墙完整性
+  lan certificate <命令>    安装/轮换客户 CA 签发的 LAN 证书或查看状态
+  lan firewall <命令>       应用、检查或移除仅限允许网段的 80/443 规则
+  remote-access cloudflare configure [--hostname HOST] [--token-file FILE]
+                             配置可选 Cloudflare Tunnel，token 不进入环境变量
+  remote-access cloudflare enable
+                             验证 origin、connector 和 Access 默认拒绝后启用
+  remote-access cloudflare status [--json]
+                             分别检查 LAN origin、Tunnel 连接和公网 Access
+  remote-access cloudflare rotate-token [--token-file FILE]
+                             原子轮换 Tunnel token，失败自动恢复旧 token
+  remote-access cloudflare disable
+                             停止 connector，保留 LAN、配置和本地 token
+  remote-access cloudflare remove --confirm SITE:REMOVE-CLOUDFLARE
+                             移除本地 connector、token 和配置，保留 Copper 数据
+  up                         启动并等待三层健康
+  stop                       停止三层服务，保留全部客户数据
+  down                       移除容器和网络，保留全部客户数据
+  restart                    重启并重新等待健康
+  status                     显示容器状态
+  logs [服务] [--follow]     脱敏查看 web、backend 或 mysql 普通日志
+  doctor                     输出可执行的环境和故障诊断
+  monitor check [--json]     检查存活、就绪、可写、可恢复、容量、证书和时间
+  monitor status [--json]    查看最近一次本地监控状态
+  monitor history [--json] [--limit N]
+                             查看 root-only 本地监控历史
+  monitor schedule <命令>    安装、禁用或检查每 5 分钟监控计时器
+  operations status [--json]
+                             检查日志上限、容量保护和 RPO/RTO 实际证据
+  operations checklist <故障> [--json]
+                             查看数据库、磁盘、备份、证书、时间或断电处置清单
+  tls <命令>                 初始化、续期、重载或检查公网 IP 证书
+  admin init [--show]        检查或在可信交互终端显示首次管理员凭据
+  backup create [--purpose manual|scheduled] [--type auto|full|incremental]
+                             创建每周全量或每日增量的一致性加密备份
+  backup status [--json]      查看最近成功/失败、连续失败和告警结果
+  backup key <命令>           登记、验证、轮换和审计客户持有的 age 恢复密钥
+  backup verify <文件>       校验 .copperbak 外层、envelope 和密文载荷
+  backup prune [--dry-run]   按完整备份链清理旧成功备份，绝不拆断保留链
+  backup schedule <命令>     安装、禁用或检查每周全量/每日增量计时器
+  backup restore stage <全量文件> [--incremental 增量文件 ...] --identity <私钥> [--restore-id ID] [--port PORT]
+                             按全量和增量父链恢复到隔离旁路并完整验证
+  backup restore status [ID] 查看旁路恢复状态
+  backup restore switch ID   人工确认后切换已验证数据，并保留原数据
+  backup restore rollback ID 人工确认后恢复切换前数据
+  backup restore discard ID  删除失败、未切换或已回滚的旁路数据
+  backup restore <旧文件>    兼容旧 M1 同版本基础备份恢复
+  storage enroll <目标> --confirm <挂载路径>
+                             登记 external 或 nas 稳定介质身份并绑定当前站点
+  storage status             显示本地、外接盘、NAS、S3 容量和故障域风险
+  storage list [目标]        列举全部或指定目标的已完成备份
+  storage fetch 目标 文件 目录
+                             从指定目标读取并校验备份到本地目录
+  storage verify 目标 文件 SHA256 字节数
+                             独立校验指定目标中的备份
+  storage delete 目标 文件 --confirm 文件
+                             受控删除指定目标中的一个已完成备份
+  release validate <清单>     严格校验 copper-release/v1 及其升级矩阵
+  release matrix validate <文件>
+                             严格校验 copper-upgrade-matrix/v1
+  release stage online <索引URL> <索引SHA256>
+                             通过 HTTPS 下载、校验并暂存目标发布与不可变镜像
+  release stage offline <索引文件> <索引SHA256>
+  release stage offline-delta <差异升级索引文件> <索引SHA256>
+                             无需镜像仓库，校验、导入并暂存离线发布介质
+  release status [版本] [--json]
+                             复核 root-only READY 发布目录和交付证据
+  security secrets audit [--json]
+                             检查秘密文件、配置、进程参数和客户离线私钥边界
+  security secrets record EVENT SECRET_ID --actor NAME --reason TEXT [--evidence SHA256]
+                             记录生成、交付、轮换、撤销、销毁或泄露处置事件，不记录秘密本体
+  security secrets rotate-database --confirm SITE --actor NAME --reason TEXT
+                             计划停写并原子轮换 MySQL 业务/root 口令，失败时恢复旧口令
+  security secrets status   查看各秘密最近生命周期事件
+  security release verify BUNDLE
+                             校验发布绑定的 SBOM、秘密扫描和漏洞治理证据包
+  security egress status [--network-isolated] [--json]
+                             查看主动外联、第三方降级、遥测和许可证心跳状态
+  upgrade preflight <清单> [--json]
+                             只读检查来源版本、schema、容量、密钥、配置和健康
+  upgrade prepare <清单>     预检后创建并校验新的加密整站备份，写入准备证据
+  upgrade migrate --identity <私钥> [--upgrade-id ID] [--port PORT]
+                             消费 PREPARED，在隔离旁路仅运行目标 Backend/Flyway
+  upgrade switch ID          人工确认后原子切换目标数据、镜像、配置和维护程序
+  upgrade rollback ID        人工确认后恢复切换前数据、运行配置和维护程序
+  upgrade accept ID          新版本备份经客户离线验证后，人工确认接受升级并释放旧回滚副本
+  upgrade discard ID         删除失败、未切换或已回滚的隔离运行数据
+  upgrade status [ID] [--json]
+                             查看 PREPARED 或升级运行状态
+  uninstall                  保留数据卸载，并移除系统命令链接
+  version                    显示 copperctl 版本
+
+退出码：0 成功；1 运行或健康失败；2 参数错误；3 环境或配置不满足门槛。
+EOF
+}
+
+usage_error() {
+  echo "错误：$*" >&2
+  usage >&2
+  exit 2
+}
+
+install_command_link() {
+  local link=/usr/local/sbin/copperctl
+  if [[ "${COPPER_TEST_MODE:-0}" == "1" ]]; then
+    note "测试模式：不安装系统级 copperctl 链接"
+    return
+  fi
+  if [[ -e "$link" && ! -L "$link" ]]; then
+    die "$link 已存在且不是符号链接；请先由管理员确认其来源"
+  fi
+  if [[ -L "$link" && "$(readlink -f "$link")" == "$SCRIPT_PATH" ]]; then
+    return
+  fi
+  ln -sfn "$SCRIPT_PATH" "$link"
+  note "已安装统一命令 $link"
+}
+
+command_name="${1:-help}"
+shift || true
+
+case "$command_name" in
+  install)
+    [[ $# -eq 0 ]] || usage_error "install 不接受额外参数"
+    require_root
+    if ! check_output="$(require_supported_platform 2>&1)"; then
+      echo "$check_output" >&2
+      exit 3
+    fi
+    if ! check_output="$(validate_tools 2>&1)"; then
+      echo "$check_output" >&2
+      exit 3
+    fi
+    preflight_report=""
+    if [[ "${COPPER_TEST_MODE:-0}" == "1" ]]; then
+      note "隔离测试模式：本地主机正式预检由专用 M5 验收单独执行"
+    else
+      preflight_report="$(mktemp)"
+      trap 'rm -f "${preflight_report:-}"' EXIT
+      if ! "$ROOT_DIR/scripts/local-host-preflight.py" --json > "$preflight_report"; then
+        cat "$preflight_report" >&2
+        exit 3
+      fi
+    fi
+    if ! "$ROOT_DIR/scripts/prepare-host.sh"; then
+      exit 3
+    fi
+    if [[ -n "$preflight_report" ]]; then
+      install -o root -g root -m 0600 "$preflight_report" "$(required_env_value COPPER_ETC_DIR)/host-preflight.json"
+      rm -f "$preflight_report"
+      trap - EXIT
+    fi
+    if ! check_output="$(validate_environment 2>&1)"; then
+      echo "$check_output" >&2
+      echo "下一步：编辑 $ENV_FILE，填写真实域名和发布清单中的不可变镜像摘要，然后重新运行 install。" >&2
+      exit 3
+    fi
+    if [[ "$(env_value COPPER_DEPLOY_MODE || true)" == "lan" ]]; then
+      if ! "$ROOT_DIR/scripts/lan-access.py" preflight --env-file "$ENV_FILE"; then
+        exit 3
+      fi
+      "$ROOT_DIR/scripts/lan-firewall.sh" apply
+    fi
+    install_command_link
+    if [[ "$(env_value COPPER_TLS_MODE || true)" == "ip" ]]; then
+      "$ROOT_DIR/scripts/ip-tls.sh" init
+    fi
+    "$ROOT_DIR/scripts/storage-capacity.sh" >/dev/null
+    compose_cmd config --quiet
+    compose_cmd up -d --remove-orphans --wait --wait-timeout 240
+    if [[ "$(env_value COPPER_TLS_MODE || true)" == "ip" ]]; then
+      "$ROOT_DIR/scripts/ip-tls.sh" install-timer
+    fi
+    if [[ "${COPPER_TEST_MODE:-0}" == "1" ]]; then
+      note "测试模式：不启用主机正式监控计时器；请使用隔离 systemd unit 验收"
+    else
+      "$ROOT_DIR/scripts/host-autostart.sh" install
+      "$ROOT_DIR/scripts/monitor-schedule.sh" install
+    fi
+    note "安装完成，三层健康门槛已通过；下一步运行 copperctl admin init"
+    ;;
+  host)
+    case "${1:-}" in
+      preflight)
+        shift
+        require_root
+        exec "$ROOT_DIR/scripts/local-host-preflight.py" "$@"
+        ;;
+      autostart)
+        shift
+        exec "$ROOT_DIR/scripts/host-autostart.sh" "$@"
+        ;;
+      *) usage_error "host 支持 preflight 或 autostart" ;;
+    esac
+    ;;
+  lan)
+    require_root
+    case "${1:-}" in
+      preflight|status)
+        lan_action="$1"
+        shift
+        exec "$ROOT_DIR/scripts/lan-access.py" "$lan_action" --env-file "$ENV_FILE" "$@"
+        ;;
+      certificate)
+        shift
+        exec "$ROOT_DIR/scripts/lan-certificate.sh" "$@"
+        ;;
+      firewall)
+        shift
+        exec "$ROOT_DIR/scripts/lan-firewall.sh" "$@"
+        ;;
+      *) usage_error "lan 支持 preflight、status、certificate 或 firewall" ;;
+    esac
+    ;;
+  remote-access)
+    require_root
+    [[ "${1:-}" == "cloudflare" ]] || usage_error "remote-access 一期只支持 cloudflare"
+    shift
+    case "${1:-}" in
+      configure|enable|status|rotate-token|disable|remove)
+        exec "$ROOT_DIR/scripts/remote-access-cloudflare.py" \
+          --env-file "$ENV_FILE" --root "$ROOT_DIR" "$@"
+        ;;
+      *) usage_error "cloudflare 支持 configure、enable、status、rotate-token、disable 或 remove" ;;
+    esac
+    ;;
+  up)
+    [[ $# -eq 0 ]] || usage_error "up 不接受额外参数"
+    exec "$ROOT_DIR/scripts/compose.sh" up
+    ;;
+  stop)
+    [[ $# -eq 0 ]] || usage_error "stop 不接受额外参数"
+    exec "$ROOT_DIR/scripts/compose.sh" stop
+    ;;
+  down)
+    [[ $# -eq 0 ]] || usage_error "down 不接受额外参数"
+    exec "$ROOT_DIR/scripts/compose.sh" down
+    ;;
+  restart)
+    [[ $# -eq 0 ]] || usage_error "restart 不接受额外参数"
+    exec "$ROOT_DIR/scripts/compose.sh" restart
+    ;;
+  status)
+    [[ $# -eq 0 ]] || usage_error "status 不接受额外参数"
+    exec "$ROOT_DIR/scripts/compose.sh" status
+    ;;
+  logs)
+    log_service=""
+    log_follow=0
+    for log_arg in "$@"; do
+      case "$log_arg" in
+        web|backend|mysql)
+          [[ -z "$log_service" ]] || usage_error "logs 一次只能查看一个服务"
+          log_service="$log_arg"
+          ;;
+        --follow)
+          [[ "$log_follow" == "0" ]] || usage_error "logs 不能重复使用 --follow"
+          log_follow=1
+          ;;
+        *) usage_error "logs 服务只能是 web、backend 或 mysql，选项只支持 --follow" ;;
+      esac
+    done
+    exec "$ROOT_DIR/scripts/compose.sh" logs "$@"
+    ;;
+  doctor)
+    [[ $# -eq 0 ]] || usage_error "doctor 不接受额外参数"
+    exec "$ROOT_DIR/scripts/doctor.sh"
+    ;;
+  monitor)
+    case "${1:-}" in
+      check|status|history)
+        exec "$ROOT_DIR/scripts/monitor.sh" "$@"
+        ;;
+      schedule)
+        shift
+        exec "$ROOT_DIR/scripts/monitor-schedule.sh" "$@"
+        ;;
+      *) usage_error "monitor 支持 check、status、history 或 schedule" ;;
+    esac
+    ;;
+  operations)
+    case "${1:-}" in
+      status|checklist) exec "$ROOT_DIR/scripts/operations.sh" "$@" ;;
+      *) usage_error "operations 支持 status 或 checklist" ;;
+    esac
+    ;;
+  tls)
+    [[ $# -eq 1 ]] || usage_error "tls 需要一个子命令：init、renew、reload、install-timer、disable-timer 或 status"
+    exec "$ROOT_DIR/scripts/ip-tls.sh" "$1"
+    ;;
+  admin)
+    [[ "${1:-}" == "init" ]] || usage_error "admin 目前只支持 init"
+    shift
+    exec "$ROOT_DIR/scripts/admin.sh" init "$@"
+    ;;
+  backup)
+    case "${1:-}" in
+      create)
+        export COPPERCTL_VERSION="$VERSION"
+        exec "$ROOT_DIR/scripts/backup-job.sh" "$@"
+        ;;
+      verify|prune)
+        export COPPERCTL_VERSION="$VERSION"
+        exec "$ROOT_DIR/scripts/backup.sh" "$@"
+        ;;
+      status)
+        shift
+        exec "$ROOT_DIR/scripts/backup-status.sh" "$@"
+        ;;
+      key)
+        shift
+        exec "$ROOT_DIR/scripts/backup-key.sh" "$@"
+        ;;
+      restore)
+        export COPPERCTL_VERSION="$VERSION"
+        if [[ "${2:-}" == "stage" || "${2:-}" == "status" || "${2:-}" == "switch" || "${2:-}" == "rollback" || "${2:-}" == "discard" ]]; then
+          shift
+          exec "$ROOT_DIR/scripts/restore.sh" "$@"
+        fi
+        exec "$ROOT_DIR/scripts/backup.sh" "$@"
+        ;;
+      schedule)
+        shift
+        exec "$ROOT_DIR/scripts/backup-schedule.sh" "$@"
+        ;;
+      *) usage_error "backup 支持 create、status、key、verify、prune、schedule 或 restore" ;;
+    esac
+    ;;
+  storage)
+    require_root
+    storage_tool="$ROOT_DIR/scripts/storage-target.py"
+    [[ -x "$storage_tool" ]] || die "缺少可执行存储目标工具 $storage_tool"
+    case "${1:-}" in
+      enroll)
+        [[ $# -eq 4 && ( "$2" == "external" || "$2" == "nas" ) && "$3" == "--confirm" ]] \
+          || usage_error "storage enroll 需要：external|nas、--confirm、完整挂载路径"
+        exec "$storage_tool" --env-file "$ENV_FILE" enroll "$2" --confirm "$4"
+        ;;
+      status)
+        [[ $# -eq 1 ]] || usage_error "storage status 不接受额外参数"
+        exec "$ROOT_DIR/scripts/storage-capacity.sh"
+        ;;
+      list)
+        if [[ $# -eq 1 ]]; then
+          exec "$storage_tool" --env-file "$ENV_FILE" list
+        elif [[ $# -eq 2 ]]; then
+          exec "$storage_tool" --env-file "$ENV_FILE" --target "$2" list
+        fi
+        usage_error "storage list 只接受可选目标 local、external、nas 或 s3"
+        ;;
+      fetch)
+        [[ $# -eq 4 ]] || usage_error "storage fetch 需要：目标、备份文件名、目标目录"
+        exec "$storage_tool" --env-file "$ENV_FILE" --target "$2" fetch "$3" "$4"
+        ;;
+      verify)
+        [[ $# -eq 5 ]] || usage_error "storage verify 需要：目标、备份文件名、SHA-256、字节数"
+        exec "$storage_tool" --env-file "$ENV_FILE" --target "$2" verify "$3" "$4" "$5"
+        ;;
+      delete)
+        [[ $# -eq 5 && "$4" == "--confirm" && "$3" == "$5" ]] \
+          || usage_error "storage delete 需要：目标、备份文件名、--confirm、相同备份文件名"
+        exec "$storage_tool" --env-file "$ENV_FILE" --target "$2" delete "$3"
+        ;;
+      *) usage_error "storage 支持 enroll、status、list、fetch、verify 或 delete" ;;
+    esac
+    ;;
+  release)
+    release_tool="$ROOT_DIR/scripts/release-contract.py"
+    [[ -x "$release_tool" ]] || die "缺少发布契约工具 $release_tool"
+    case "${1:-}" in
+      validate)
+        [[ $# -eq 2 ]] || usage_error "release validate 需要一个 copper-release/v1 清单"
+        exec "$release_tool" validate-manifest "$2"
+        ;;
+      matrix)
+        [[ $# -eq 3 && "$2" == "validate" ]] || usage_error "release matrix 只支持 validate FILE"
+        exec "$release_tool" validate-matrix "$3"
+        ;;
+      stage|status)
+        exec "$ROOT_DIR/scripts/release-delivery.sh" "$@"
+        ;;
+      *) usage_error "release 支持 validate、matrix validate、stage 或 status" ;;
+    esac
+    ;;
+  security)
+    require_root
+    security_tool="$ROOT_DIR/scripts/security-secrets.py"
+    registry="$(required_env_value COPPER_VAR_DIR)/security/secret-lifecycle.json"
+    case "${1:-}" in
+      egress)
+        [[ "${2:-}" == "status" ]] || usage_error "security egress 只支持 status"
+        shift 2
+        exec "$ROOT_DIR/scripts/egress-audit.sh" "$@"
+        ;;
+      secrets)
+        case "${2:-}" in
+          audit)
+            shift 2
+            exec "$security_tool" audit --env-file "$ENV_FILE" "$@"
+            ;;
+          record)
+            [[ $# -ge 8 ]] || usage_error "security secrets record 需要 EVENT、SECRET_ID、--actor 和 --reason"
+            event="$3"
+            secret_id="$4"
+            shift 4
+            record_args=()
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --actor|--reason)
+                  [[ -n "${2:-}" ]] || usage_error "$1 缺少值"
+                  record_args+=("$1" "$2")
+                  shift 2
+                  ;;
+                --evidence)
+                  [[ -n "${2:-}" ]] || usage_error "--evidence 缺少 SHA-256"
+                  record_args+=(--evidence-sha256 "$2")
+                  shift 2
+                  ;;
+                *) usage_error "security secrets record 包含未知参数：$1" ;;
+              esac
+            done
+            exec "$security_tool" record --env-file "$ENV_FILE" --registry "$registry" \
+              --event "$event" --secret-id "$secret_id" "${record_args[@]}"
+            ;;
+          status)
+            [[ $# -eq 2 ]] || usage_error "security secrets status 不接受额外参数"
+            exec "$security_tool" status --env-file "$ENV_FILE" --registry "$registry"
+            ;;
+          rotate-database)
+            shift 2
+            rotate_args=()
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --confirm|--actor|--reason)
+                  [[ -n "${2:-}" ]] || usage_error "$1 缺少值"
+                  rotate_args+=("$1" "$2")
+                  shift 2
+                  ;;
+                *) usage_error "security secrets rotate-database 包含未知参数：$1" ;;
+              esac
+            done
+            exec "$ROOT_DIR/scripts/security-rotate-database.py" --root "$ROOT_DIR" --env-file "$ENV_FILE" "${rotate_args[@]}"
+            ;;
+          *) usage_error "security secrets 支持 audit、record、status 或 rotate-database" ;;
+        esac
+        ;;
+      release)
+        [[ "${2:-}" == "verify" && $# -eq 3 ]] || usage_error "security release 只支持 verify BUNDLE"
+        exec "$ROOT_DIR/scripts/security-evidence.py" verify --bundle "$3"
+        ;;
+      *) usage_error "security 支持 secrets、egress 或 release" ;;
+    esac
+    ;;
+  upgrade)
+    [[ $# -ge 1 ]] || usage_error "upgrade 需要 preflight、prepare、migrate、switch、rollback、discard 或 status"
+    exec "$ROOT_DIR/scripts/upgrade.sh" "$@"
+    ;;
+  uninstall)
+    [[ $# -eq 0 ]] || usage_error "uninstall 不接受额外参数"
+    require_root
+    if [[ "${COPPER_TEST_MODE:-0}" != "1" ]]; then
+      "$ROOT_DIR/scripts/host-autostart.sh" disable
+      "$ROOT_DIR/scripts/monitor-schedule.sh" disable
+      "$ROOT_DIR/scripts/backup-schedule.sh" disable
+      "$ROOT_DIR/scripts/ip-tls.sh" disable-timer
+    fi
+    if [[ "$(env_value COPPER_DEPLOY_MODE || true)" == "lan" ]]; then
+      "$ROOT_DIR/scripts/lan-firewall.sh" remove
+    fi
+    "$ROOT_DIR/scripts/compose.sh" uninstall
+    if [[ -L /usr/local/sbin/copperctl && "$(readlink -f /usr/local/sbin/copperctl)" == "$SCRIPT_PATH" ]]; then
+      unlink /usr/local/sbin/copperctl
+      note "已移除 /usr/local/sbin/copperctl；数据和当前发布目录保持不变"
+    fi
+    if [[ -L /usr/local/sbin/copper-maintain && "$(readlink -f /usr/local/sbin/copper-maintain)" == "$ROOT_DIR/copper-maintain" ]]; then
+      unlink /usr/local/sbin/copper-maintain
+      note "已移除 /usr/local/sbin/copper-maintain；数据和当前发布目录保持不变"
+    fi
+    ;;
+  version|--version|-V)
+    [[ $# -eq 0 ]] || usage_error "version 不接受额外参数"
+    echo "copperctl $VERSION"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage_error "未知命令 $command_name"
+    ;;
+esac

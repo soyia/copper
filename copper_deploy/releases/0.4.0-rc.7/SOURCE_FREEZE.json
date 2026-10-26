@@ -1,0 +1,57 @@
+{
+  "format": "copper-source-freeze/v1",
+  "version": "0.4.0-rc.7",
+  "frozenOn": "2026-10-16",
+  "status": "ENGINEERING_DELIVERY_PASS",
+  "components": {
+    "copper_web": {
+      "commit": "006860eda316de185b215108a424c9a8290945a7",
+      "testedCommit": "bbfb16d2925c8d2cac4e83ee60d6ec8f5959b8dc",
+      "tree": "255a5f853aef8094ce13d7f6efde4c7ad6afe4fc"
+    },
+    "copper_backend": {
+      "commit": "a5fb8a52e9ce07fa35a3db527142b4808382488e",
+      "testedCommit": "522af367d936bc3a753287514d7659fb5a00588d",
+      "tree": "9d2285b2e73fd117cf5057b79c6f3a2ae98d1418"
+    },
+    "copper_deploy": {
+      "commit": "40279eb26d9366fbbfae19c233cb0a689086be62",
+      "testedCommit": "7b246fea4a958599c3b02bd6a96992bdf627b6b5",
+      "tree": "a80c2b9135e1bdf95db2607ef6ca27e2fe3d7564"
+    }
+  },
+  "database": {
+    "schemaVersion": 68,
+    "migrationCount": 67,
+    "migrationManifestSha256": "fa3cf115bc9f309a36fce7c579e086498c27a7db58c58421ef43e1346b48467a",
+    "foreignKeys": 92,
+    "currentRealMySqlTests": 103,
+    "directProductUpgradeSources": []
+  },
+  "acceptance": {
+    "webTests": 175,
+    "backendUnitTests": 227,
+    "backendRealMySqlTests": 103,
+    "deployPythonTests": 291,
+    "sourceCandidateStrictScan": "PASS_ZERO_FINDINGS",
+    "encryptedLogicalRecovery": "PASS_256_TABLES_3999_ROWS_2_FILES",
+    "browserAndMobile": "DEFERRED_BY_OWNER_NONBLOCKING",
+    "thirdPartySteps": "DEFERRED_BY_OWNER_NONBLOCKING"
+  },
+  "sourceArchive": {
+    "fileName": "copper-source-0.4.0-rc.7.tar.gz",
+    "sha256": "cb0e0694ea82680c6eaf77410486fd408e467020fe6d431a298abf4dad44f176",
+    "bytes": 2773243,
+    "containsGitHistory": false,
+    "containsCustomerData": false,
+    "containsRuntimeSecrets": false
+  },
+  "imageBuild": "NOT_IN_THIS_SOURCE_FREEZE_SCOPE",
+  "publicReleaseCreated": false,
+  "productionDeploymentPerformed": false,
+  "evidence": {
+    "backend": "copper_backend/docs/RELEASE_ACCEPTANCE_20261016.json",
+    "logicalRecovery": "copper_backend/docs/RELEASE_LOGICAL_RECOVERY_20261016.json",
+    "deploy": "copper_deploy/docs/RELEASE_DATA_SAFETY_20261016.json"
+  }
+}

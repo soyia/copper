@@ -1,0 +1,17 @@
+{
+  "format": "copper-evidence-hydration-report/v1",
+  "status": "ORIGINAL_CLOSED_CONTENT_VERIFIED",
+  "completedAt": "2026-10-25T11:47:05.487710+00:00",
+  "closedEntries": 3394,
+  "ordinaryFiles": 3395,
+  "closedFilesSha256": "8b1b2bdec8ea1ba3bbab3f64153cbb540a4ef33f4fb2f856771614142d17acd7",
+  "originalArchiveSha256": "c7541c1a10f25c8309a233f2096417565807490297010457dfd231b115af0945",
+  "originalArchiveByteIdentityClaimed": false,
+  "retainedOriginalFiles": 2990,
+  "alreadyVerified": 405,
+  "cacheCopies": 0,
+  "officialDownloads": 0,
+  "networkUsed": false,
+  "rightsApprovalChanged": false,
+  "contentAddressedCacheUsed": true
+}

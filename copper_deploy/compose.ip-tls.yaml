@@ -1,0 +1,15 @@
+services:
+  web:
+    volumes:
+      - type: bind
+        source: ./config/Caddyfile.ip-tls
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - type: bind
+        source: ${COPPER_ETC_DIR:-/etc/copper}/tls
+        target: /etc/copper/tls
+        read_only: true
+      - type: bind
+        source: ${COPPER_VAR_DIR:-/var/lib/copper}/acme-webroot
+        target: /var/lib/acme
+        read_only: true

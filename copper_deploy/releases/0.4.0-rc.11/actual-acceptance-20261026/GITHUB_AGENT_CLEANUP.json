@@ -1,0 +1,11 @@
+{
+  "recordType": "DEDICATED_GITHUB_AGENT_RC11_CLEANUP",
+  "completedAt": "2026-10-25T23:26:28.162723+00:00",
+  "pid": 45022,
+  "socket": "/private/tmp/copper-acceptance-20261025/github-agent-rc11.sock",
+  "result": "TERMINATED_AFTER_REAL_PACKAGE_PASS",
+  "socketStillExists": false,
+  "dailyAgentModified": false,
+  "privateGithubKeyCopiedToServer": false,
+  "authorizedDeadline": "2026-10-25T23:34:33.130025+00:00"
+}

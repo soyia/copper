@@ -1,0 +1,37 @@
+{
+  "format": "copper-confidentiality-audit/v1",
+  "scannerVersion": "1.0.1",
+  "generatedAt": "2026-10-16T00:41:45.826Z",
+  "decision": "PASS",
+  "policy": {
+    "failClosed": true,
+    "gateMode": "strict",
+    "matchingContentStored": false,
+    "originalPathsStored": false,
+    "historyScope": "all-reachable-refs-in-non-shallow-clone",
+    "releaseScope": "explicit-candidate-directories-before-publication"
+  },
+  "repositories": [],
+  "releaseCandidates": [
+    {
+      "name": "copper_rc7_source",
+      "current": {
+        "filesDiscovered": 986,
+        "filesScanned": 986,
+        "bytesScanned": 11986822,
+        "largeFiles": 0
+      }
+    }
+  ],
+  "summary": {
+    "total": 0,
+    "blocking": 0,
+    "newBlocking": 0,
+    "knownBlockers": 0,
+    "approved": 0,
+    "byCategory": {},
+    "byRepository": {},
+    "byScope": {}
+  },
+  "findings": []
+}

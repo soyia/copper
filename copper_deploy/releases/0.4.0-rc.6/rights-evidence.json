@@ -1,0 +1,40 @@
+{
+  "artifacts": {
+    "rights": {
+      "bytes": 30611432,
+      "file": "copper-rights-0.4.0-rc.6.tar.gz",
+      "sha256": "7ae03a0d0f003c3a9807a8df239e75a7d07f4a47619c464652beaf4eb36a4af8",
+      "status": "ENGINEERING_PASS"
+    },
+    "security": {
+      "file": "copper-security-0.4.0-rc.6.tar.gz",
+      "sha256": "cfa09c9e96fb08c22cf73f54e22a97dbff809c851f78474ce796ad9cdb41f2d3",
+      "status": "PASS"
+    },
+    "sources": {
+      "file": "copper-m6-03-sources.tar.gz",
+      "sha256": "86d8e6483be1583e6564e49343ab6124bf02f4cd868e1a9a24eeb74702a34ed3"
+    }
+  },
+  "counts": {
+    "assets": 3,
+    "components": 683,
+    "exceptions": 0,
+    "licenseFiles": 702,
+    "sboms": 6,
+    "tools": 18
+  },
+  "format": "copper-rights-release-record/v1",
+  "legalReview": {
+    "issue": "https://github.com/soyia/copper_web/issues/60",
+    "status": "REQUIRED"
+  },
+  "release": {
+    "backendSourceCommit": "c6511e62ea6996355b21dfc3e99c02c56a231185",
+    "deployCommit": "887a92c258a40a1f8ea333ede5b193ce9b4e74e0",
+    "manifestSha256": "478002bc3f167a2aba66634d7b52307dd88b7421d737728f4486d1695daa9345",
+    "version": "0.4.0-rc.6",
+    "webSourceCommit": "c1b3dbb4a9aad586629da11c22c2fb52461d8d9c"
+  },
+  "status": "ENGINEERING_PASS_LEGAL_REVIEW_REQUIRED"
+}

@@ -1,0 +1,17 @@
+{
+  "exceptions": [
+    {
+      "disposition": "WRITTEN_AUTHORIZATION_CONFIRMED",
+      "evidenceFile": "authorization-review-summary.txt",
+      "evidenceSha256": "REPLACE_WITH_LOWERCASE_SHA256",
+      "evidenceSummary": "A non-sensitive summary confirms the exact asset/component, permitted redistribution modes, territory and term.",
+      "expiresAt": "2026-08-01T00:00:00Z",
+      "owner": "named-rights-owner",
+      "reason": "Temporary release-specific authorization review while the permanent ledger record is updated.",
+      "subjectId": "REPLACE_WITH_LEDGER_ID",
+      "subjectType": "asset"
+    }
+  ],
+  "format": "copper-rights-exceptions/v1",
+  "releaseVersion": "REPLACE_WITH_EXACT_PRODUCT_VERSION"
+}

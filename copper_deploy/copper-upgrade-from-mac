@@ -1,0 +1,604 @@
+#!/usr/bin/env python3
+"""Customer-facing, resumable Mac orchestration for a safe Copper upgrade."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as dt
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import pathlib
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from dataclasses import dataclass
+from typing import Iterator
+
+
+ROOT = pathlib.Path(__file__).resolve().parent
+LOADER = importlib.machinery.SourceFileLoader("copper_mac_manager_for_upgrade", str(ROOT / "copper-manage-from-mac"))
+SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("无法加载 Copper 本机管理入口")
+manager = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = manager
+SPEC.loader.exec_module(manager)
+
+
+STATE_FORMAT = "copper-mac-upgrade-pending/v1"
+RECEIPT_FORMAT = "copper-mac-upgrade-receipt/v1"
+DELIVERY_FORMAT = "copper-delivery/v1"
+DELTA_DELIVERY_FORMAT = "copper-upgrade-delivery/v1"
+VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?")
+HASH_RE = re.compile(r"[0-9a-f]{64}")
+IMAGE_REFERENCE_RE = re.compile(r"[^\s:@]+(?:/[^\s:@]+)*(?::[^\s@]+)?@sha256:[0-9a-f]{64}")
+SAFE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,191}")
+UPGRADE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{7,47}")
+TRANSFER_ATTEMPTS = 3
+TRANSFER_RETRY_SECONDS = 2
+
+
+class UpgradeError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Delivery:
+    source: pathlib.Path
+    directory: pathlib.Path
+    index: pathlib.Path
+    index_sha256: str
+    version: str
+    mode: str
+    base_version: str
+    manifest_name: str
+    files: tuple[pathlib.Path, ...]
+    image_plan: tuple[tuple[str, str], ...]
+
+
+def fail(message: str) -> None:
+    raise UpgradeError(message)
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as reader:
+        for block in iter(lambda: reader.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def safe_name(value: object, label: str) -> str:
+    if not isinstance(value, str) or not SAFE_NAME_RE.fullmatch(value) or pathlib.PurePosixPath(value).name != value:
+        fail(f"升级包中的{label}文件名不安全")
+    return value
+
+
+def file_record(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {"role", "name", "bytes", "sha256"}:
+        fail(f"升级包中的{label}记录不完整")
+    safe_name(value.get("name"), label)
+    if not isinstance(value.get("bytes"), int) or int(value["bytes"]) < 0:
+        fail(f"升级包中的{label}文件大小不正确")
+    if not isinstance(value.get("sha256"), str) or not HASH_RE.fullmatch(str(value["sha256"])):
+        fail(f"升级包中的{label}校验码不正确")
+    return value
+
+
+def validate_delivery(source: pathlib.Path, directory: pathlib.Path, expected_digest: str) -> Delivery:
+    indexes = sorted({
+        *directory.glob("copper-delivery-offline-*.json"),
+        *directory.glob("copper-upgrade-delivery-offline-delta-*.json"),
+    })
+    if len(indexes) != 1 or indexes[0].is_symlink() or not indexes[0].is_file():
+        fail("升级包必须且只能包含一份离线发布索引")
+    index = indexes[0]
+    observed_digest = sha256_file(index)
+    if observed_digest != expected_digest:
+        fail("升级包的发布索引与发布方提供的完整校验码不一致")
+    try:
+        document = json.loads(index.read_text(encoding="utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        fail(f"升级包发布索引无法读取：{error}")
+    format_value = document.get("format") if isinstance(document, dict) else ""
+    delta = format_value == DELTA_DELIVERY_FORMAT
+    expected_keys = {"format", "version", "mode", "os", "arch", "manifest", "artifacts", "images"}
+    if delta:
+        expected_keys |= {"baseVersion", "baseIndexSha256"}
+    if not isinstance(document, dict) or set(document) != expected_keys:
+        fail("升级包发布索引字段不完整或包含未知内容")
+    mode = str(document.get("mode", ""))
+    if (format_value, mode) not in {
+        (DELIVERY_FORMAT, "offline"),
+        (DELTA_DELIVERY_FORMAT, "offline-delta"),
+    }:
+        fail("这里只接受 Copper 完整离线升级包或受控差异升级包")
+    version = str(document.get("version", ""))
+    if not VERSION_RE.fullmatch(version):
+        fail("升级包的产品版本不正确")
+    if document.get("os") != "ubuntu-24.04" or document.get("arch") != "amd64":
+        fail("升级包不适用于 Ubuntu 24.04 x86_64")
+    manifest = file_record(document.get("manifest"), "发布清单")
+    if manifest.get("role") != "manifest" or manifest.get("name") != f"copper-release-{version}.env":
+        fail("升级包发布清单与目标版本不一致")
+    artifacts_value = document.get("artifacts")
+    if not isinstance(artifacts_value, list):
+        fail("升级包文件清单不正确")
+    artifacts = [file_record(value, f"文件 {index_number + 1}") for index_number, value in enumerate(artifacts_value)]
+    roles = [str(value.get("role", "")) for value in artifacts]
+    required_roles = {"deploy", "matrix", "notes", "acme"}
+    if not delta:
+        required_roles.add("images")
+    if not required_roles.issubset(set(roles)) or set(roles) - (required_roles | {"images"}) or len(roles) != len(set(roles)):
+        fail("升级包缺少程序、兼容表、说明、证书工具，或镜像文件记录不正确")
+    images = document.get("images")
+    if not isinstance(images, list) or len(images) != 3:
+        fail("升级包必须包含 Web、后台和数据库三张镜像")
+    image_roles: set[str] = set()
+    image_plan: list[tuple[str, str]] = []
+    for image in images:
+        image_keys = {"role", "reference", "platform", "localId"}
+        if delta:
+            image_keys |= {"delivery", "baseReference", "baseLocalId"}
+        if not isinstance(image, dict) or set(image) != image_keys:
+            fail("升级包镜像记录不完整")
+        role = str(image.get("role", ""))
+        if role not in {"web", "backend", "mysql"} or role in image_roles:
+            fail("升级包镜像角色重复或不正确")
+        image_roles.add(role)
+        if image.get("platform") != "linux/amd64" or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image.get("localId", ""))):
+            fail("升级包镜像平台或本机身份不正确")
+        if not IMAGE_REFERENCE_RE.fullmatch(str(image.get("reference", ""))):
+            fail("升级包镜像不是不可变摘要引用")
+        delivery = str(image.get("delivery", "included"))
+        if delivery not in {"included", "reuse"}:
+            fail("差异升级包镜像交付方式不正确")
+        if delta:
+            if not IMAGE_REFERENCE_RE.fullmatch(str(image.get("baseReference", ""))):
+                fail("差异升级包来源镜像不是不可变摘要引用")
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image.get("baseLocalId", ""))):
+                fail("差异升级包来源镜像身份不正确")
+            if (delivery == "reuse") != (image.get("localId") == image.get("baseLocalId")):
+                fail("差异升级包复用结论与内容摘要不一致")
+        image_plan.append((role, delivery))
+    included = sum(1 for _role, delivery in image_plan if delivery == "included")
+    if delta and (("images" in roles) != bool(included)):
+        fail("差异升级包的镜像文件与变化组件不一致")
+    records = [manifest, *artifacts]
+    expected_names = {index.name, *(str(record["name"]) for record in records)}
+    actual_names: set[str] = set()
+    for entry in directory.iterdir():
+        if entry.is_symlink() or not entry.is_file():
+            fail(f"升级包包含不允许的目录、链接或特殊文件：{entry.name}")
+        actual_names.add(entry.name)
+    if actual_names != expected_names:
+        fail(f"升级包文件集合不完整或含多余文件：缺少 {sorted(expected_names - actual_names)}，多出 {sorted(actual_names - expected_names)}")
+    checked = [index]
+    for record in records:
+        candidate = directory / str(record["name"])
+        if candidate.stat().st_size != int(record["bytes"]) or sha256_file(candidate) != str(record["sha256"]):
+            fail(f"升级文件校验失败：{candidate.name}")
+        checked.append(candidate)
+    base_version = str(document.get("baseVersion", ""))
+    if delta and (
+        not VERSION_RE.fullmatch(base_version)
+        or base_version == version
+        or not HASH_RE.fullmatch(str(document.get("baseIndexSha256", "")))
+    ):
+        fail("差异升级包来源版本或来源证明不正确")
+    return Delivery(
+        source, directory, index, observed_digest, version, mode, base_version,
+        str(manifest["name"]), tuple(checked), tuple(image_plan),
+    )
+
+
+def safe_extract(archive: pathlib.Path, destination: pathlib.Path) -> pathlib.Path:
+    try:
+        with tarfile.open(archive, "r:*") as package:
+            members = package.getmembers()
+            for member in members:
+                path = pathlib.PurePosixPath(member.name)
+                if path.is_absolute() or not path.parts or ".." in path.parts or not (member.isfile() or member.isdir()):
+                    fail("升级包压缩文件包含不安全路径、链接或特殊文件")
+            package.extractall(destination, members=members, filter="data")
+    except (tarfile.TarError, OSError) as error:
+        fail(f"升级包无法解压：{error}")
+    candidates = [path for path in destination.iterdir() if path.is_dir() and not path.is_symlink()]
+    root = candidates[0] if len(candidates) == 1 else destination
+    return root
+
+
+@contextlib.contextmanager
+def open_delivery(source: pathlib.Path, expected_digest: str) -> Iterator[Delivery]:
+    source = source.expanduser().resolve()
+    if source.is_symlink() or not source.exists():
+        fail(f"升级包不存在或不安全：{source}")
+    if source.is_dir():
+        yield validate_delivery(source, source, expected_digest)
+        return
+    if not source.is_file() or not (source.name.endswith(".tar.gz") or source.name.endswith(".tgz")):
+        fail("请选择解压后的升级包目录，或选择 .tar.gz 升级包")
+    with tempfile.TemporaryDirectory(prefix="copper-upgrade-") as temporary:
+        root = safe_extract(source, pathlib.Path(temporary))
+        yield validate_delivery(source, root, expected_digest)
+
+
+def pending_path(primary: pathlib.Path, site_id: str) -> pathlib.Path:
+    return primary / "upgrades" / f"{site_id}-pending.json"
+
+
+def save_state(path: pathlib.Path, state: dict[str, object]) -> None:
+    state["updatedAt"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    manager.write_private_json(path, state)
+
+
+def load_state(path: pathlib.Path, site_id: str) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    state = manager.secure_private_json(path, "未完成升级记录")
+    if state.get("formatVersion") != STATE_FORMAT or state.get("siteId") != site_id:
+        fail("未完成升级记录与当前站点不一致")
+    if not HASH_RE.fullmatch(str(state.get("indexSha256", ""))) or not VERSION_RE.fullmatch(str(state.get("targetVersion", ""))):
+        fail("未完成升级记录字段不完整")
+    if not UPGRADE_ID_RE.fullmatch(str(state.get("upgradeId", ""))):
+        fail("未完成升级编号不正确")
+    return state
+
+
+def sftp_quote(value: str) -> str:
+    if any(character in value for character in "\r\n\0"):
+        fail("上传路径包含不安全字符")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def remote_file_state(profile: dict[str, str], remote_relative: str) -> tuple[int | None, str] | None:
+    relative = pathlib.PurePosixPath(remote_relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        fail("服务器上传路径不安全")
+    script = (
+        f'p="$HOME"/{shlex.quote(relative.as_posix())}\n'
+        'if [ ! -f "$p" ]; then printf "MISSING\\n"; '
+        'else printf "%s %s\\n" "$(stat -c %s -- "$p")" "$(sha256sum -- "$p" | awk \'{print $1}\')"; fi'
+    )
+    result = manager.remote(profile, script, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    observed = result.stdout.decode("utf-8", errors="replace").strip()
+    if observed == "MISSING":
+        return None, ""
+    match = re.fullmatch(r"([0-9]+) ([0-9a-f]{64})", observed)
+    if not match:
+        return None
+    return int(match.group(1)), match.group(2)
+
+
+def sftp_base(profile: dict[str, str]) -> list[str]:
+    return [
+        "sftp", "-b", "-", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+        "-i", str(pathlib.Path(profile["sshKey"]).expanduser().resolve()),
+        f"{profile['sshUser']}@{profile['sshHost']}",
+    ]
+
+
+def upload_file(profile: dict[str, str], local: pathlib.Path, remote_relative: str) -> None:
+    wanted = sha256_file(local)
+    wanted_size = local.stat().st_size
+    for attempt in range(1, TRANSFER_ATTEMPTS + 1):
+        observed = remote_file_state(profile, remote_relative)
+        if observed is not None and observed[0] == wanted_size and observed[1] == wanted:
+            print(f"{local.name}：服务器已有完整文件，跳过上传。")
+            return
+        size = observed[0] if observed is not None else None
+        if size is not None and size >= wanted_size:
+            manager.remote(profile, f'rm -f -- "$HOME"/{shlex.quote(remote_relative)}', check=False)
+            size = None
+        if size:
+            print(f"{local.name}：从已完成的 {min(99, int(size * 100 / wanted_size))}% 继续（尝试 {attempt}/3）。")
+        else:
+            print(f"{local.name}：开始上传（尝试 {attempt}/3）。")
+        operation = "put -a" if size else "put"
+        transfer = subprocess.run(
+            sftp_base(profile),
+            input=f"{operation} {sftp_quote(str(local))} {sftp_quote(remote_relative)}\n",
+            text=True,
+            check=False,
+        )
+        if transfer.returncode == 0:
+            completed = remote_file_state(profile, remote_relative)
+            if completed is not None and completed[0] == wanted_size and completed[1] == wanted:
+                print(f"{local.name}：上传和完整性校验通过。")
+                return
+        if attempt < TRANSFER_ATTEMPTS:
+            print(f"{local.name} 尚未完成，{TRANSFER_RETRY_SECONDS} 秒后自动继续。")
+            time.sleep(TRANSFER_RETRY_SECONDS)
+    fail(f"{local.name} 连续 3 次仍未上传完成；服务器进度已保留，网络恢复后重新进入会继续")
+
+
+def upload_delivery(profile: dict[str, str], delivery: Delivery, remote_root: str) -> None:
+    manager.remote(profile, f'mkdir -p -- "$HOME"/{shlex.quote(remote_root)}')
+    for local in delivery.files:
+        upload_file(profile, local, f"{remote_root}/{local.name}")
+
+
+def remote_json(profile: dict[str, str], command: str) -> dict[str, object] | None:
+    result = manager.remote(profile, command, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        value = json.loads(result.stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def upgrade_status(profile: dict[str, str], upgrade_id: str = "") -> dict[str, object] | None:
+    suffix = f" {shlex.quote(upgrade_id)}" if upgrade_id else ""
+    return remote_json(profile, f"sudo copperctl upgrade status{suffix} --json")
+
+
+def stage_release(profile: dict[str, str], delivery: Delivery, remote_root: str) -> None:
+    remote_index = f'"$HOME"/{shlex.quote(remote_root + "/" + delivery.index.name)}'
+    manager.remote(
+        profile,
+        f"sudo copperctl release stage {shlex.quote(delivery.mode)} {remote_index} {delivery.index_sha256}\n"
+        f"sudo copperctl release status {shlex.quote(delivery.version)}",
+        tty=True,
+    )
+
+
+def ensure_prepared(profile: dict[str, str], delivery: Delivery) -> None:
+    observed = upgrade_status(profile)
+    if observed is not None and observed.get("status") == "PREPARED":
+        if observed.get("targetVersion") != delivery.version:
+            fail("服务器已有另一目标版本的未完成升级；请先处理该升级")
+        print("服务器已有本目标版本的升级前备份和准备记录，继续使用。")
+        return
+    manifest = f"/var/lib/copper/releases/{delivery.version}/{delivery.manifest_name}"
+    manager.remote(
+        profile,
+        f"sudo copperctl upgrade preflight {shlex.quote(manifest)}\n"
+        f"sudo copperctl upgrade prepare {shlex.quote(manifest)}",
+        tty=True,
+    )
+
+
+def ensure_migrated(profile: dict[str, str], primary: pathlib.Path, upgrade_id: str) -> dict[str, object]:
+    observed = upgrade_status(profile, upgrade_id)
+    if observed is not None:
+        status = str(observed.get("status", ""))
+        if status in {"MIGRATION_VALIDATED", "SWITCHED", "ROLLED_BACK", "COMPLETED"}:
+            return observed
+        if status in {"MIGRATION_FAILED", "DIRTY", "RECOVERY_FAILED"}:
+            fail(f"服务器保留了升级失败现场（{status}）；当前正式站点未被本入口覆盖，请先按现场证据处理")
+        fail(f"服务器升级仍处于 {status or '未知状态'}；请稍后重新进入，本入口不会重复启动迁移")
+    identity = (primary / "copper-age-identity.txt").read_bytes()
+    remote_identity = f"/run/copper-{upgrade_id}-identity.txt"
+    script = (
+        f"trap 'sudo rm -f {shlex.quote(remote_identity)}' EXIT HUP INT TERM\n"
+        f"sudo sh -c 'umask 077; cat > \"$1\"' sh {shlex.quote(remote_identity)}\n"
+        f"sudo copperctl upgrade migrate --identity {shlex.quote(remote_identity)} --upgrade-id {shlex.quote(upgrade_id)} --port 18080\n"
+        f"sudo rm -f {shlex.quote(remote_identity)}\n"
+        "trap - EXIT HUP INT TERM"
+    )
+    manager.remote(profile, script, input_bytes=identity)
+    observed = upgrade_status(profile, upgrade_id)
+    if observed is None or observed.get("status") != "MIGRATION_VALIDATED":
+        fail("隔离迁移没有达到可切换状态；当前正式站点未修改")
+    return observed
+
+
+def write_receipt(
+    state: dict[str, object],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    protected: manager.ProtectionResult,
+) -> pathlib.Path:
+    receipt = primary / "upgrade-receipts" / f"{state['upgradeId']}.json"
+    document: dict[str, object] = {
+        "formatVersion": RECEIPT_FORMAT,
+        "siteId": state["siteId"],
+        "targetVersion": state["targetVersion"],
+        "upgradeId": state["upgradeId"],
+        "indexSha256": state["indexSha256"],
+        "acceptedAt": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "postUpgradeBackup": {
+            "name": protected.archive.name,
+            "sha256": sha256_file(protected.archive),
+            "verificationReceipt": protected.verification_receipt.name,
+            "verificationReceiptSha256": sha256_file(protected.verification_receipt),
+        },
+        "result": "PASSED",
+        "formalReleaseBoundary": "INTERNAL_REHEARSAL_ONLY",
+    }
+    manager.write_private_json(receipt, document)
+    target = secondary / "upgrade-receipts" / receipt.name
+    manager.copy_checked(receipt, target)
+    return receipt
+
+
+def run_upgrade(
+    profile: dict[str, str],
+    primary: pathlib.Path,
+    secondary: pathlib.Path,
+    media: pathlib.Path,
+    delivery: Delivery,
+    state_path: pathlib.Path,
+    state: dict[str, object],
+) -> int:
+    remote_root = str(state["remoteRoot"])
+    local_phase = str(state.get("phase", "SELECTED"))
+    status = upgrade_status(profile, str(state["upgradeId"]))
+    if status is None:
+        upload_delivery(profile, delivery, remote_root)
+        state["phase"] = "UPLOADED"
+        save_state(state_path, state)
+        stage_release(profile, delivery, remote_root)
+        state["phase"] = "RELEASE_READY"
+        save_state(state_path, state)
+        ensure_prepared(profile, delivery)
+        state["phase"] = "PREPARED"
+        save_state(state_path, state)
+        status = ensure_migrated(profile, primary, str(state["upgradeId"]))
+        state["phase"] = str(status.get("status", "MIGRATION_VALIDATED"))
+        save_state(state_path, state)
+    else:
+        server_status = str(status.get("status", ""))
+        if server_status == "COMPLETED":
+            if not isinstance(state.get("postUpgradeArchive"), str) or not isinstance(state.get("postUpgradeReceipt"), str):
+                fail("服务器已完成升级验收，但本机缺少升级后备份路径；请保留现场并核对数据保护证明")
+            protected = manager.ProtectionResult(
+                pathlib.Path(str(state["postUpgradeArchive"])),
+                pathlib.Path(str(state["postUpgradeReceipt"])),
+            )
+            if not protected.archive.is_file() or not protected.verification_receipt.is_file():
+                fail("服务器已完成升级验收，但本机升级后备份证明已丢失")
+            receipt = write_receipt(state, primary, secondary, protected)
+            state_path.unlink()
+            print(f"上次升级已完成；本机回执已经补齐：{receipt}")
+            return 0
+        if server_status not in {"MIGRATION_VALIDATED", "SWITCHED", "ROLLED_BACK", "COMPLETED"}:
+            if server_status in {"MIGRATION_FAILED", "DIRTY", "RECOVERY_FAILED"}:
+                fail(f"服务器保留了升级失败现场（{server_status}）；当前正式站点没有被本入口静默覆盖")
+            fail(f"服务器升级仍处于 {server_status or '未知状态'}；请稍后重新进入")
+
+    if status.get("status") == "MIGRATION_VALIDATED":
+        print("\n新版本已在隔离环境完成数据库升级和数据核对，正式站点尚未改变。")
+        if manager.choose("是否现在切换到新版本？", ["现在切换（推荐）", "暂不切换，下次继续"]) != 1:
+            return 0
+        manager.remote(profile, f"sudo copperctl upgrade switch {shlex.quote(str(state['upgradeId']))}", tty=True)
+        status = upgrade_status(profile, str(state["upgradeId"])) or {}
+    if status.get("status") != "SWITCHED":
+        if status.get("status") == "ROLLED_BACK":
+            fail("本次升级已经回滚，当前仍是旧版本")
+        fail(f"升级切换未达到成功状态：{status.get('status', '未知')}")
+    if local_phase != "PROTECTED":
+        state["phase"] = "SWITCHED"
+        save_state(state_path, state)
+        print(f"\n请打开 https://{profile['domain']}，使用原管理员账号和原密码登录。")
+        verification = manager.choose(
+            "请核对版本、往来单位、商品、最近单据、库存、应收应付和图片",
+            ["登录和数据都正确", "发现问题，立即回滚", "暂未核对，下次继续"],
+        )
+        if verification == 2:
+            manager.remote(profile, f"sudo copperctl upgrade rollback {shlex.quote(str(state['upgradeId']))}", tty=True)
+            state["phase"] = "ROLLED_BACK"
+            save_state(state_path, state)
+            print("升级已回滚并验证，旧版本重新对外服务；升级现场继续保留用于调查。")
+            return 0
+        if verification == 3:
+            return 0
+
+    protected: manager.ProtectionResult
+    if local_phase == "PROTECTED" and isinstance(state.get("postUpgradeArchive"), str) and isinstance(state.get("postUpgradeReceipt"), str):
+        protected = manager.ProtectionResult(pathlib.Path(str(state["postUpgradeArchive"])), pathlib.Path(str(state["postUpgradeReceipt"])))
+        if not protected.archive.is_file() or not protected.verification_receipt.is_file():
+            fail("升级后数据保护证明已经丢失；请重新创建并验证备份")
+    else:
+        protected = manager.create_download_verify(profile, primary, secondary, media)
+        state["phase"] = "PROTECTED"
+        state["postUpgradeArchive"] = str(protected.archive)
+        state["postUpgradeReceipt"] = str(protected.verification_receipt)
+        save_state(state_path, state)
+    print("\n升级后的整站备份已经下载、离线验证并复制到第二位置。")
+    if manager.choose(
+        "是否接受本次升级并释放旧版本回滚副本？",
+        ["接受升级并释放旧副本（推荐）", "暂时保留旧副本，下次继续"],
+    ) != 1:
+        return 0
+    manager.remote(profile, f"sudo copperctl upgrade accept {shlex.quote(str(state['upgradeId']))}", tty=True)
+    manager.remote(profile, "sudo copperctl doctor\nsudo copperctl monitor check", tty=True)
+    receipt = write_receipt(state, primary, secondary, protected)
+    state_path.unlink()
+    print("\n升级完成：新版本已运行，升级后备份已离线验证，旧回滚副本已安全释放。")
+    print(f"升级回执：{receipt}")
+    return 0
+
+
+def collect_new_state(profile: dict[str, str], source_text: str, digest_text: str) -> tuple[pathlib.Path, str, dict[str, object]]:
+    source = pathlib.Path(source_text or manager.prompt("升级包目录或 .tar.gz 文件位置")).expanduser().resolve()
+    digest = (digest_text or manager.prompt("发布方提供的 64 位完整校验码")).strip().lower()
+    if not HASH_RE.fullmatch(digest):
+        fail("完整校验码必须是 64 位小写十六进制字符")
+    with open_delivery(source, digest) as delivery:
+        print("\nCopper 升级计划")
+        print("=" * 60)
+        print(f"站点：https://{profile['domain']}")
+        print(f"目标版本：{delivery.version}")
+        if delivery.mode == "offline-delta":
+            print(f"来源版本：{delivery.base_version}")
+        print(f"升级包：{source}")
+        print(f"发布索引 SHA-256：{digest}")
+        if delivery.mode == "offline-delta":
+            included = [role for role, mode in delivery.image_plan if mode == "included"]
+            reused = [role for role, mode in delivery.image_plan if mode == "reuse"]
+            print("需要上传的运行组件：" + ("、".join(included) if included else "无"))
+            print("直接复用服务器组件：" + ("、".join(reused) if reused else "无"))
+        print("将自动完成：上传续传、升级前备份、隔离迁移、人工切换、升级后备份和离线验证。")
+        print("=" * 60)
+        wanted = f"UPGRADE {profile['siteId']} TO {delivery.version}"
+        observed = input(f"确认继续请输入 [{wanted}]：").strip()
+        if observed != wanted:
+            fail("确认内容不匹配，未开始上传或修改服务器")
+        upgrade_id = "upgrade-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        state: dict[str, object] = {
+            "formatVersion": STATE_FORMAT,
+            "siteId": profile["siteId"],
+            "domain": profile["domain"],
+            "source": str(source),
+            "indexSha256": digest,
+            "targetVersion": delivery.version,
+            "upgradeId": upgrade_id,
+            "remoteRoot": f".copper-upgrade-media/{profile['siteId']}/{delivery.version}-{digest[:12]}",
+            "phase": "SELECTED",
+            "createdAt": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    return source, digest, state
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Copper Mac 一键安全升级")
+    parser.add_argument("--site-id")
+    parser.add_argument("--delivery", default="")
+    parser.add_argument("--index-sha256", default="")
+    args = parser.parse_args(argv)
+    if sys.platform != "darwin":
+        fail("本入口当前只支持 Mac")
+    _, profile = manager.select_profile(args.site_id)
+    _, primary, secondary, media = manager.require_local_files(profile)
+    state_path = pending_path(primary, profile["siteId"])
+    state = load_state(state_path, profile["siteId"])
+    if state is not None:
+        print(f"检测到上次未完成的升级：目标 {state['targetVersion']}，当前步骤 {state.get('phase', '未知')}。")
+        if manager.choose("如何处理？", ["从上次步骤继续（推荐）", "退出并保留记录"]) != 1:
+            return 0
+        source = pathlib.Path(str(state["source"]))
+        digest = str(state["indexSha256"])
+    else:
+        source, digest, state = collect_new_state(profile, args.delivery, args.index_sha256)
+        save_state(state_path, state)
+    with open_delivery(source, digest) as delivery:
+        if delivery.version != state["targetVersion"] or delivery.index_sha256 != state["indexSha256"]:
+            fail("重新打开的升级包与未完成升级记录不一致")
+        return run_upgrade(profile, primary, secondary, media, delivery, state_path, state)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\n升级已暂停；已上传文件、服务器状态和本机记录均已保留，下次进入会继续。", file=sys.stderr)
+        raise SystemExit(130)
+    except (UpgradeError, manager.ManagerError, OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        print(f"\n升级已停止：{error}", file=sys.stderr)
+        print("原站点和已生成的备份不会被本入口静默删除；重新进入可继续核对现场。", file=sys.stderr)
+        raise SystemExit(3)
