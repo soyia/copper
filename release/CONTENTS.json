@@ -5451,14 +5451,14 @@
       "sha256": "cf61d5a159667a52f5622aeee811332d2996d902d31dd902cab1615e9fc176c0"
     },
     "release/CONFIDENTIALITY_POLICY.json": {
-      "bytes": 11603,
+      "bytes": 12643,
       "gitMode": "100644",
-      "sha256": "07f92ed8b4d2b3e120a702b1bb75d64a28698d04f9a55ec03c352158cec68e7c"
+      "sha256": "5ec218bc6fb9d1eeaf22d23e19de46957663b1cce2abe5bbd5a170cf4e56b7c4"
     },
     "release/EXACT_ARTIFACT_REVIEWS.json": {
-      "bytes": 1927,
+      "bytes": 2071,
       "gitMode": "100644",
-      "sha256": "7febbf03d0c9d35677757a3cab2419c4ed7898caae68420de6589342eb39aaf5"
+      "sha256": "3dac34fbebb2065b4d3aa36562b63712fb6db820d0c666699e8078ef94384266"
     },
     "release/LICENSE_DECISION.json": {
       "bytes": 414,
