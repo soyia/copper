@@ -15,7 +15,10 @@
     "33b49fdb3c83fa9bb9042ef2509d4dd0d2a30e6aa652a8691f7c35287cb4811f",
     "db955276752aec25b91897b76670951ee49e6f5061a3913a248c694e464f2981",
     "49ecdd587fda91fb3768ab77cffda27f2dc7a1c10e7ad0ca99a5b27ef78ee9c1",
-    "9d453f4d247646796f21b19fcc7d42ebd1d44a80d3b9a10b2b4d0f6618b9c824"
+    "9d453f4d247646796f21b19fcc7d42ebd1d44a80d3b9a10b2b4d0f6618b9c824",
+    "3c54b8b130f8f210f9da4ac230f204dfbb6a6aa0fc875a48b642a70975596611",
+    "401534fb9e36a12388287bdc78b5b1f6c0723e5eb04a167f6f652f483f561b95"
   ],
-  "policyRulesRemovedOrBroadened": false
+  "policyRulesRemovedOrBroadened": false,
+  "newSourceGitHistoryArchiveBlobsIndependentlyRehashed": true
 }

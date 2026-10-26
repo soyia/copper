@@ -193,6 +193,20 @@
       "owner": "Copper release engineering technical review",
       "reason": "Exact byte-verified synthetic acceptance evidence or frozen source driver; SHA256 2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d. Independent peer matched all ordinary archive files to the reviewed closed inventory, no customer backup, private identity or real customer records. This approval covers no old private history.",
       "expiresOn": "2027-10-26"
+    },
+    {
+      "findingId": "3c54b8b130f8f210f9da4ac230f204dfbb6a6aa0fc875a48b642a70975596611",
+      "decision": "false-positive",
+      "owner": "Copper release engineering technical review",
+      "reason": "Exact synthetic source-acceptance archive Git blob verified against previously reviewed SHA256 15b430ed562ab9c86c112f1b6e3cc14352a75dafc95bd144a7ac8d22510a1aeb; only new independent source history, no customer payload/private identity, no old platform history approval.",
+      "expiresOn": "2027-10-26"
+    },
+    {
+      "findingId": "401534fb9e36a12388287bdc78b5b1f6c0723e5eb04a167f6f652f483f561b95",
+      "decision": "false-positive",
+      "owner": "Copper release engineering technical review",
+      "reason": "Exact synthetic source-acceptance archive Git blob verified against previously reviewed SHA256 2856c1d03cec67baaaffe7bf9acb7892c82466ad5fde2297836f9c4d3336189d; only new independent source history, no customer payload/private identity, no old platform history approval.",
+      "expiresOn": "2027-10-26"
     }
   ]
 }
