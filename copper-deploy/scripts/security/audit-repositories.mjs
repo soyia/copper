@@ -14,9 +14,9 @@ import { basename, dirname, extname, join, relative, resolve, sep } from 'node:p
 import { spawnSync } from 'node:child_process'
 
 const REPORT_FORMAT = 'copper-confidentiality-audit/v1'
-const SCANNER_VERSION = '1.0.1'
+const SCANNER_VERSION = '1.0.0'
 const SAFE_TOP_LEVEL = new Set(['.github', 'config', 'docs', 'scripts', 'src', 'tests'])
-const GITHUB_PLATFORM_NOREPLY_ADDRESS = ['noreply', 'github.com'].join('@')
+const GITHUB_SERVICE_NOREPLY = ['noreply', 'github.com'].join('@')
 
 function fail(message, exitCode = 2) {
   process.stderr.write(`M6 confidentiality audit error: ${message}\n`)
@@ -28,11 +28,8 @@ function sha256(value) {
 }
 
 function isApprovedGitHubNoreplyAddress(email) {
-  const normalizedEmail = email.toLowerCase()
-  return (
-    normalizedEmail === GITHUB_PLATFORM_NOREPLY_ADDRESS ||
-    normalizedEmail.endsWith('@users.noreply.github.com')
-  )
+  const normalized = email.toLowerCase()
+  return normalized === GITHUB_SERVICE_NOREPLY || normalized.endsWith('@users.noreply.github.com')
 }
 
 function parseArguments(argv) {
@@ -85,8 +82,8 @@ function usage() {
   return `Usage:
   node scripts/security/audit-repositories.mjs \\
     --repo copper_web=/path/to/copper-web \\
-    [--repo copper_backend=/path/to/copper_backend] \\
-    [--repo copper_deploy=/path/to/copper_deploy] \\
+    [--repo copper_backend=/path/to/copper-backend] \\
+    [--repo copper_deploy=/path/to/copper-deploy] \\
     --config config/m6-confidentiality-audit.json \\
     [--baseline config/m6-known-confidentiality-findings.json] \\
     --report /private/path/report.json \\

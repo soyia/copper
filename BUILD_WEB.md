@@ -5,8 +5,8 @@
 ```text
 copper/
 ├── copper-web/
-├── copper_backend/
-└── copper_deploy/
+├── copper-backend/
+└── copper-deploy/
 ```
 
 本次公开范围是源码；没有在这里发布新容器、安装介质或在线产品。源码快照中的 Web 来自提交 `d497d7958e6148cd31a47248fc36c85f2e0c24ed`，准确来源映射以公开快照的来源清单为准。`copper-web/package.json` 的 `0.4.0-rc.7` 是现有组件版本；产品组合版本和运行版本以相应发布清单为准。
@@ -37,7 +37,7 @@ pnpm build
 先检查 `8191`、`8193` 和 Web 开发端口 `8076` 的占用情况。`8191` 留给站点拥有者正式运行的接口；调试不得停止、替换或重启该进程。配置后端的隔离数据库和必要环境变量后，在仓库根目录的另一个终端执行：
 
 ```sh
-cd copper_backend
+cd copper-backend
 COPPER_PORT=8193 mvn spring-boot:run
 ```
 
@@ -55,7 +55,7 @@ Vite 页面位于 `http://127.0.0.1:8076`。按 BUILD_BACKEND.md 使用 prod/Sec
 COPPER_API_TARGET=http://127.0.0.1:8193 pnpm preview --host 127.0.0.1
 ```
 
-预览端口为 `8077`。Vite 开发和预览服务器用于本地验证，不作为生产部署方案。实际生产安装、备份和恢复请参照 `copper_deploy/` 说明及对应版本的真实发布材料。
+预览端口为 `8077`。Vite 开发和预览服务器用于本地验证，不作为生产部署方案。实际生产安装、备份和恢复请参照 `copper-deploy/` 说明及对应版本的真实发布材料。
 
 ## 许可证、通知与后续运行版本
 

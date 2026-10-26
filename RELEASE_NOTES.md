@@ -1,13 +1,9 @@
-# Copper 0.4.0-rc.11 — AGPL public source prerelease
+# Copper 0.4.0-rc.12 — 统一项目命名
 
-发布日期：2026-10-26。当前发布为开发者可构建的源码版，原始 Copper 代码正式采用 AGPL-3.0-only。三套组件完整源文件、迁移、锁文件、测试及构建脚本均在本仓，不依赖旧私有仓的访问权限；历史私有 Git/PR/Actions 对象没有导入。第三方 Caddy 入口及其 Apache 通知保留原样，没有被改授 AGPL。
+本源码修订统一当前公开工程的目录和组件名为 copper-backend、copper-web、copper-deploy，并同步根README、BUILD文档、开发规则、工具帮助中的实际路径及源码来源/闭集索引。命名规则见NAMING.md。没有用全局替换改写历史私有仓URL、冻结证据、审计标签、数据库/业务契约或旧归档内部格式。
 
-本轮新源码验证：Java17 后端227项单元/契约测试及JAR打包通过；Web176项测试、TypeScript及Vite构建通过；Deploy386项Python测试、static/M3合同通过。所有运行时代码保持来源字节。为保留自动源码归档里的历史测试输入，只修改了 copper_deploy/.gitattributes 的打包属性。验证细节和实际工具版本见 release/VALIDATION.json。最初的沙盒instrumentation/随机loopback限制和缺少离线缓存均保留诊断，已在不改源代码的环境重试后通过。
+运行时代码、数据库schema和部署未改，内嵌运行候选仍为其既有rc.11；本次rc.12仅为公开源码目录修订，不签发新官方JAR/镜像/一站式介质或升级路径。许可保持AGPL-3.0-only，第三方Caddy原许可和通知不变。
 
-原已验收功能修复保留：停用往来单位/身份禁止新增经营过账；数量六位与金额两位的口径分离；整站附件引用补齐；生产checksum前导./读取兼容保持严格路径保护；闭合binlog区间的连续性与实际文件集合检查。原Ubuntu24.04 amd64/MySQL8.4实库schema68/92外键、全量＋增量stage/switch、恢复后继续经营、三容器重建和新全量独立解密/恢复已有精确来源的内部实际证据。本次源码公开没有重新签发这些镜像身份或冒充新的二进制验收。
+前次rc.11源码发布说明及实际验证原文保留在 release/history/0.4.0-rc.11/。本轮路径/链接检查、构建、源码校验与匿名下载结果分别记录本轮实际执行范围；不把历史227/98实库、手机/浏览器或客户/律师签署改写为本轮通过。新的源码包为 copper-0.4.0-rc.12-source.tar.gz，使用独立新SHA256SUMS；旧rc.11 tag和全部发布资产保持原样。
 
-该源码版是RC，未发布官方JAR、Web dist、OCI容器、Docker DEB或一站式安装介质；原内部介质不改名上传。引用的npm/Maven/Go依赖由使用者构建时另行下载，所获依赖及日后编译产物仍须遵守其各自许可/源码/通知要求，见THIRD_PARTY.md。当前无直接升级来源、稳定版/LTS或商业SLA承诺。
-
-真实浏览器/承诺手机设备、律师与会计、客户非开发者独立安装、客户持钥见证及商业交接签署按负责人决定延期，不作为本次公开源码版的交付阻挡，不填写通过结论。M6专业意见和已知第三方材料、Docker上游项保留原状态；它们不被说成已经修复或审批完成。运行修改版网络服务时应给实际使用者提供对应源码入口。商业闭源例外未授予。
-
-源码下载请优先使用本Release的 copper-0.4.0-rc.11-source.tar.gz 和独立SHA256SUMS；也可按精确tag匿名克隆本仓。用 scripts/verify-source-release.py 校验源码闭集后，再按根README与BUILD文档构建。匿名克隆、公开资产下载和最终publiccommit将记录在发布后的独立PUBLICATION_RECEIPT.json，不在提交前预写PASS。
+本轮实际验证：新后端目录编译打包通过；前端176项测试及TypeScript/Vite构建通过；Deploy386项Python测试及static/M3合同通过；根目录布局和文档链接通过。未重跑未受影响的后端单元/实库或整机恢复测试。实际范围与日志摘要见release/VALIDATION.json。

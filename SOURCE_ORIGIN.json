@@ -1,6 +1,6 @@
 {
   "format": "copper-public-source-origin/v1",
-  "version": "0.4.0-rc.11",
+  "version": "0.4.0-rc.12",
   "edition": "source-prerelease",
   "publicRepository": "https://github.com/soyia/copper",
   "license": "AGPL-3.0-only",
@@ -10,7 +10,7 @@
       "privateSourceRepository": "https://github.com/soyia/copper_backend",
       "commit": "ecd7ee7001bf01368504c98e579f8e9c3cbe6af9",
       "tree": "c8dd483fd24cf29b6dcfca98dbd9dd851fac0fdd",
-      "publishedDirectory": "copper_backend",
+      "publishedDirectory": "copper-backend",
       "trackedFiles": 386,
       "gitHistoryImported": false
     },
@@ -26,7 +26,7 @@
       "privateSourceRepository": "https://github.com/soyia/copper_deploy",
       "commit": "7f44f09924f51e950b07b36921140e24e1269f3a",
       "tree": "c010a7f3b1a02bf012d1a920e01ddd32206173be",
-      "publishedDirectory": "copper_deploy",
+      "publishedDirectory": "copper-deploy",
       "trackedFiles": 377,
       "gitHistoryImported": false
     }
@@ -42,7 +42,7 @@
   },
   "originalRuntimeSourceBytesChanged": false,
   "packagingOnlyModifiedFiles": [
-    "copper_deploy/.gitattributes"
+    "copper-deploy/.gitattributes"
   ],
   "oldGitHistoryOrPlatformObjectsImported": false,
   "oldPlatformHistoryDispositionChanged": false,
@@ -53,5 +53,22 @@
     "gitBlob": "0c97efd25b5974b974ed9a8a18207bc4f55bb338",
     "bytes": 34020,
     "sha256": "d8a6cc31abc16b6748c7a21f21611f5a1ec33f67d22ca23d7da1c19b95496bee"
-  }
+  },
+  "previousSourceVersion": "0.4.0-rc.11",
+  "previousPublicSourceCommit": "ba872ff852b0213245cf8f81d33226e9d4479311",
+  "runtimeProductCandidateVersion": "0.4.0-rc.11",
+  "directoryRenames": {
+    "copper_backend": "copper-backend",
+    "copper_deploy": "copper-deploy"
+  },
+  "sourceModifiedFiles": [
+    "copper-backend/AGENTS.md",
+    "copper-backend/scripts/security/audit-repositories.mjs",
+    "copper-deploy/.gitattributes",
+    "copper-deploy/AGENTS.md",
+    "copper-deploy/scripts/security/audit-repositories.mjs",
+    "copper-web/AGENTS.md",
+    "copper-web/scripts/security/audit-repositories.mjs"
+  ],
+  "sourceChangeScope": "Naming/current documentation/help paths and source-archive packaging attributes only; business runtime source unchanged."
 }

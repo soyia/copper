@@ -25,12 +25,13 @@ def verify(root):
  require(actual==set(files)|{manifest},'source file set differs; verify before building in an extracted archive')
  origin=json.loads((root/'SOURCE_ORIGIN.json').read_text());index=json.loads((root/'release/SOURCE_FILE_INDEX.json').read_text())
  require(origin['license']=='AGPL-3.0-only' and len(index)==origin['originalTrackedFileCount'],'origin/index differs')
+ require(doc.get('version')==origin.get('version'),'source inventory version differs')
  changed=[]
  for name,row in index.items():
   require(name in files and digest(root/name)==row['publishedSha256'],'original source mapping differs: '+name)
   require(row['gitMode']==files[name]['gitMode'],'original mode differs: '+name)
   if row['publishedSha256']!=row['originalSha256']:changed.append(name)
- require(changed==origin['packagingOnlyModifiedFiles'],'unrecorded source change')
+ require(sorted(changed)==sorted(origin.get('sourceModifiedFiles',origin['packagingOnlyModifiedFiles'])),'unrecorded source change')
  required_license='d8a6cc31abc16b6748c7a21f21611f5a1ec33f67d22ca23d7da1c19b95496bee'
  for directory in ['',* [v['publishedDirectory'] for v in origin['components'].values()]]:require(digest(root/directory/'LICENSE')==required_license,'AGPL text changed')
  for name,expected in {'main.go':'ac320c3ac47ad8abed7a0d2595639d78f9ff55cf1dba8494a66cd8851c5d076e','LICENSE':'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30','NOTICE':'1e8070f17d98fe6156a6aaa937039e5985c0ae94853096de49e85113f4b4bef3'}.items():require(digest(root/'copper-web/docker/caddy'/name)==expected,'third-party original changed')

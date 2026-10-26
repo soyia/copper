@@ -4,7 +4,7 @@
 - GitHub `origin` 是唯一 Git 交付远端，不得读取、同步或推送 Gitee。
 - GitHub `origin/main` 是唯一最新交付基线。当前为产品负责人个人开发模式，Deploy 默认不创建、不等待 Pull Request，也不触发、不等待 GitHub Actions。个人开发提交信息必须包含 `[skip ci]`，避免直接推送时自动启动工作流。完成必要静态合同测试和指定验收机真实验证后，必须先获取并确认 `origin/main` 没有未纳入的新提交，再将单一可快进提交直接推送到 `origin/main`，随后仅快进同步本地 `main`。如果不能快进、存在冲突或需要改写历史，禁止强推，必须停下说明。
 - 只有产品负责人之后明确指定“使用 GitHub Actions”“创建 Deploy PR”“恢复 CI/PR 门槛”或对某次正式发布/客户交付单独提出要求时，才去掉 `[skip ci]`、运行 Actions 或创建 Deploy Pull Request；不得自行恢复这些门槛。
-- M3 起新产品版本必须遵守 `docs/M3_VERSIONING_AND_COMPATIBILITY.md` 与 `config/release-policy.env`；`copper_deploy` 发布清单是客户产品版本和组件组合的唯一权威来源，前后端工程版本、Flyway、备份格式和导出格式不得冒充产品版本。
+- M3 起新产品版本必须遵守 `docs/M3_VERSIONING_AND_COMPATIBILITY.md` 与 `config/release-policy.env`；`copper-deploy` 发布清单是客户产品版本和组件组合的唯一权威来源，前后端工程版本、Flyway、备份格式和导出格式不得冒充产品版本。
 - 已发布的 Git 标签、Release、组件清单、镜像摘要和 Flyway 迁移均不可覆盖修改。目标发布清单未明确列出并实测当前来源版本时，不得宣称可直接升级；包含 schema/data 变化时禁止用旧镜像或逆向 SQL 冒充安全回滚。
 - M1 正式基线仅支持 Ubuntu Server 24.04 LTS、amd64、Docker Engine 29.x、Compose Plugin 5.x 和 MySQL 8.4.x LTS。
 - 正式主机只发布 Web 的 80/443；Backend 8191 和 MySQL 3306 禁止映射宿主机端口。
